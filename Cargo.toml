@@ -1,0 +1,29 @@
+[package]
+name = "padington-server"
+version = "0.1.0"
+authors = ["Xiphoseer"]
+edition = "2018"
+
+[dependencies]
+tungstenite = "0.10.1"
+tokio-tungstenite = "0.10.1"
+tokio-rustls = "0.13"
+log = "0.4"
+env_logger = "0.7"
+displaydoc = "0.1.6"
+toml = "0.5.6"
+structopt = "0.3.14"
+
+[dependencies.serde]
+version = "1.0.97"
+features = ["derive"]
+
+[dependencies.futures-util]
+version = "0.3"
+default-features = false
+features = ["async-await", "sink", "std"]
+
+[dependencies.tokio]
+version = "0.2"
+default-features = false
+features = ["io-util", "time", "stream", "macros", "sync", "fs"]
