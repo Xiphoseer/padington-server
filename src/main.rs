@@ -1,26 +1,27 @@
 pub mod channel;
 pub mod client;
 pub mod command;
-pub mod lobby;
-pub mod util;
 pub mod config;
+pub mod lobby;
+pub mod model;
+pub mod util;
 
-use crate::config::{ConnSetup, Flags};
 use crate::client::handle_connection;
-use crate::lobby::{LobbyClient, LobbyServer, JoinRequest};
+use crate::config::{ConnSetup, Flags};
+use crate::lobby::{JoinRequest, LobbyClient, LobbyServer};
+use futures_util::future::ready;
 use log::*;
-use std::net::{SocketAddr, ToSocketAddrs};
 use std::future::Future;
 use std::io;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use structopt::StructOpt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Error;
+use tokio_rustls::rustls::{NoClientAuth, ServerConfig};
+use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tokio_tungstenite::stream::Stream;
-use tokio_rustls::rustls::{ NoClientAuth, ServerConfig };
-use tokio_rustls::{TlsAcceptor, server::TlsStream};
-use futures_util::future::ready;
-use structopt::StructOpt;
-use std::sync::Arc;
+use tokio_tungstenite::tungstenite::Error;
 
 async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStream) {
     if let Err(e) = handle_connection(lc, peer, stream).await {
@@ -37,13 +38,16 @@ async fn wait_for_connections<F, R>(
     mut listener: TcpListener,
     lobby_sender: mpsc::Sender<JoinRequest>,
     map: F,
-) where F: Fn(TcpStream) -> R, R: Future<Output=Result<ClientStream, io::Error>> {
+) where
+    F: Fn(TcpStream) -> R,
+    R: Future<Output = Result<ClientStream, io::Error>>,
+{
     while let Ok((stream, peer)) = listener.accept().await {
         let lc = LobbyClient::from(lobby_sender.clone());
         match map(stream).await {
             Ok(stream) => {
                 tokio::spawn(accept_connection(lc, peer, stream));
-            },
+            }
             Err(e) => error!("Invalid connection request: {:?}", e),
         }
     }
@@ -56,9 +60,7 @@ async fn main() {
     let flags = Flags::from_args();
     let cfg = flags.load_cfg().await.unwrap();
 
-    let addr = cfg.addr.as_str()
-        .to_socket_addrs().unwrap()
-        .next().unwrap();
+    let addr = cfg.addr.as_str().to_socket_addrs().unwrap().next().unwrap();
 
     let (lobby_sender, lobby_receiver) = mpsc::channel(100);
 
@@ -71,8 +73,9 @@ async fn main() {
         ConnSetup::Basic => {
             wait_for_connections(listener, lobby_sender, |stream| {
                 ready(Ok(Stream::Plain(stream)))
-            }).await;
-        },
+            })
+            .await;
+        }
         ConnSetup::Tls { certs, mut keys } => {
             let mut config = ServerConfig::new(NoClientAuth::new());
             if keys.len() < 1 {
@@ -86,7 +89,8 @@ async fn main() {
                 let acceptor = acceptor.clone();
                 let stream = acceptor.accept(stream).await?;
                 Ok(Stream::Tls(stream))
-            }).await;
+            })
+            .await;
         }
     }
 }

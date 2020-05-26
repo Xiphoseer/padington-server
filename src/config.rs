@@ -1,22 +1,21 @@
-use std::path::PathBuf;
-use tungstenite::http::Uri;
 use serde::{de, Deserialize, Deserializer};
-use std::str::FromStr;
 use std::fmt::Display;
-use std::io::{self, BufReader};
 use std::fs::File;
+use std::io::{self, BufReader};
+use std::path::PathBuf;
+use std::str::FromStr;
 use structopt::StructOpt;
 use tokio::fs::read_to_string;
+use tungstenite::http::Uri;
 
-use tokio_rustls::rustls::{ Certificate, PrivateKey };
-use tokio_rustls::rustls::internal::pemfile::{ certs, pkcs8_private_keys };
+use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
+use tokio_rustls::rustls::{Certificate, PrivateKey};
 
 #[derive(StructOpt)]
 pub struct Flags {
     #[structopt(long = "cfg", short = "c")]
     pub cfg: Option<PathBuf>,
 }
-
 
 pub enum ConnSetup {
     Basic,
@@ -62,9 +61,7 @@ impl Flags {
                     let keys = cfg_tls.load_keys()?;
                     return Ok(Setup {
                         addr: addr.to_string(),
-                        conn: ConnSetup::Tls {
-                            certs, keys
-                        }
+                        conn: ConnSetup::Tls { certs, keys },
                     });
                 }
             }

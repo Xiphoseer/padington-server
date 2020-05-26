@@ -1,6 +1,6 @@
 pub mod server;
 
-pub use server::{LobbyServer, UserID, ChannelID};
+pub use server::{ChannelID, LobbyServer, UserID};
 
 use crate::channel::{Broadcast, Request};
 use tokio::sync::{broadcast, mpsc, oneshot};

@@ -1,7 +1,7 @@
-use crate::ClientStream;
-use crate::channel::{Broadcast, Request};
+use crate::channel::{Broadcast, InitReply, Request, RequestKind};
 use crate::command::Command;
-use crate::lobby::{LobbyClient, JoinResponse, UserID};
+use crate::lobby::{JoinResponse, LobbyClient, UserID};
+use crate::ClientStream;
 use futures_util::future::{select, Either};
 use futures_util::{SinkExt, StreamExt};
 use log::*;
@@ -54,8 +54,43 @@ pub async fn handle_connection(
                         let msg = msg?;
                         match msg {
                             Message::Text(t) => match t.parse() {
-                                Ok(cmd) => {
-                                    if let Err(e) = msg_tx.send(Request { source: id, cmd }).await {
+                                Ok(Command::Init) => {
+                                    let (tx, rx) = oneshot::channel::<InitReply>();
+                                    let req = Request {
+                                        source: id,
+                                        kind: RequestKind::Init(tx),
+                                    };
+                                    if let Err(e) = msg_tx.send(req).await {
+                                        error!("{:?}", e);
+                                        break;
+                                    }
+                                    match rx.await {
+                                        Ok(state) => {
+                                            ws_sender
+                                                .send(Message::text(format!("init|{}", state)))
+                                                .await?;
+                                        }
+                                        Err(err) => {
+                                            error!("{}", err);
+                                        }
+                                    }
+                                }
+                                Ok(Command::Chat(msg)) => {
+                                    let req = Request {
+                                        source: id,
+                                        kind: RequestKind::Chat(msg),
+                                    };
+                                    if let Err(e) = msg_tx.send(req).await {
+                                        error!("{:?}", e);
+                                        break;
+                                    }
+                                }
+                                Ok(Command::Close) => {
+                                    let req = Request {
+                                        source: id,
+                                        kind: RequestKind::Close,
+                                    };
+                                    if let Err(e) = msg_tx.send(req).await {
                                         error!("{:?}", e);
                                         break;
                                     }
@@ -73,12 +108,12 @@ pub async fn handle_connection(
                                 debug!("WebSocket closed ({:?})", c);
                                 let close_req = Request {
                                     source: id,
-                                    cmd: Command::Close,
+                                    kind: RequestKind::Close,
                                 };
                                 match msg_tx.send(close_req).await {
                                     Ok(()) => {
                                         debug!("Sent {:?}", Command::Close);
-                                    },
+                                    }
                                     Err(e) => {
                                         error!("Failed to send {:?} ({:?})", Command::Close, e);
                                     }
@@ -94,7 +129,7 @@ pub async fn handle_connection(
                     None => {
                         debug!("WebSocket stream was terminated unexpectedly");
                         break;
-                    },
+                    }
                 };
             }
             Either::Right((bct, msg_fut_continue)) => {
