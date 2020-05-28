@@ -55,6 +55,15 @@ async fn wait_for_connections<F, R>(
 
 #[tokio::main]
 async fn main() {
+    if std::env::var(env_logger::DEFAULT_FILTER_ENV).is_err() {
+        std::env::set_var(
+            env_logger::DEFAULT_FILTER_ENV,
+            #[cfg(debug_assertions)]
+            "warn,padington_server=trace",
+            #[cfg(not(debug_assertions))]
+            "warn,padington_server=info",
+        );
+    }
     env_logger::init();
 
     let flags = Flags::from_args();
