@@ -1,24 +1,29 @@
 use crate::lobby::{ChannelID, UserID};
-use crate::model::{CodeBlockAttrs, HeadingAttrs, Node};
+use crate::model::{steps::Steps, CodeBlockAttrs, HeadingAttrs, Node};
 use futures_util::future::{select, Either};
 use log::*;
 use serde::Serialize;
-use std::fmt;
 use tokio::stream::StreamExt;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-#[derive(Debug)]
-pub struct InitReply(String);
+#[derive(Debug, Serialize)]
+pub struct StepBatch {
+    pub src: UserID,
+    pub steps: Steps,
+}
 
-impl fmt::Display for InitReply {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
+#[derive(Debug)]
+pub struct InitReply {
+    /// The last complete state of the doc
+    pub doc: String,
+    /// The steps that are not yet part of the doc
+    pub steps: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DocState {
     doc: Node,
+    version: usize,
 }
 
 #[derive(Debug)]
@@ -30,6 +35,7 @@ pub struct Request {
 #[derive(Debug)]
 pub enum RequestKind {
     Chat(String),
+    Steps(usize, Steps),
     Init(oneshot::Sender<InitReply>),
     Close,
 }
@@ -38,6 +44,7 @@ pub enum RequestKind {
 pub enum Broadcast {
     NewUser(UserID),
     UserLeft(UserID),
+    Steps(String),
     ChatMessage(UserID, String),
 }
 
@@ -51,7 +58,10 @@ pub struct Channel {
 
 impl Channel {
     pub async fn handle_messages(mut self) {
-        let doc_state = DocState {
+        let mut step_buffer: Vec<StepBatch> = Vec::new();
+
+        let mut doc_state = DocState {
+            version: 0,
             doc: Node::Doc {
                 content: vec![
                     Node::Heading {
@@ -116,8 +126,11 @@ impl Channel {
                         let id = request.source;
                         match request.kind {
                             RequestKind::Init(response) => {
-                                let text = serde_json::to_string(&doc_state).unwrap();
-                                if let Err(_e) = response.send(InitReply(text)) {
+                                let doc = serde_json::to_string(&doc_state).unwrap();
+                                let steps = serde_json::to_string(&step_buffer).unwrap();
+                                let reply = InitReply { doc, steps };
+
+                                if let Err(_e) = response.send(reply) {
                                     error!("Client dropped while initializing");
                                 } else {
                                     info!("New user: {}", id);
@@ -127,6 +140,22 @@ impl Channel {
                             RequestKind::Chat(text) => {
                                 info!("New message: {}", text);
                                 self.bct_tx.send(Broadcast::ChatMessage(id, text)).unwrap();
+                            }
+                            RequestKind::Steps(version, steps) => {
+                                if version == doc_state.version {
+                                    info!("Received steps v.{}:", version);
+                                    for step in &steps {
+                                        info!("Step {:?}", step);
+                                    }
+                                    doc_state.version += steps.len();
+                                    let batch = StepBatch { src: id, steps };
+                                    let msg = [&batch];
+                                    let text = serde_json::to_string(&msg).unwrap();
+                                    step_buffer.push(batch);
+                                    self.bct_tx.send(Broadcast::Steps(text)).unwrap();
+                                } else {
+                                    info!("Rejected steps for outdated version {}", version);
+                                }
                             }
                             RequestKind::Close => {
                                 info!("User left: {}", id);

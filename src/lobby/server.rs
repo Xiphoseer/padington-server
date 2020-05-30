@@ -4,6 +4,7 @@ use crate::util::Counter;
 use displaydoc::Display;
 use futures_util::future::{select, Either};
 use log::*;
+use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -13,7 +14,8 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 macro_rules! make_id {
     ($name:ident, $key:literal) => {
-        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+        #[serde(into = "u64", from = "u64")]
         pub struct $name(u64);
 
         impl $name {
