@@ -1,4 +1,4 @@
-use super::Fragment;
+use super::{de, Fragment};
 use serde::{Deserialize, Serialize};
 
 pub type Steps = Vec<Step>;
@@ -32,6 +32,7 @@ pub enum Step {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LinkAttrs {
     href: String,
+    #[serde(default, deserialize_with = "de::deserialize_or_default")]
     title: String,
 }
 
