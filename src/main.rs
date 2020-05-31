@@ -9,8 +9,10 @@ pub mod util;
 use crate::client::handle_connection;
 use crate::config::{ConnSetup, Flags};
 use crate::lobby::{JoinRequest, LobbyClient, LobbyServer};
+use color_eyre::Report;
+use eyre::{eyre, WrapErr};
 use futures_util::future::ready;
-use log::*;
+//use log::*;
 use std::future::Future;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -22,6 +24,7 @@ use tokio_rustls::rustls::{NoClientAuth, ServerConfig};
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tokio_tungstenite::stream::Stream;
 use tokio_tungstenite::tungstenite::Error;
+use tracing::{error, info, instrument};
 
 async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStream) {
     if let Err(e) = handle_connection(lc, peer, stream).await {
@@ -53,9 +56,35 @@ async fn wait_for_connections<F, R>(
     }
 }
 
+#[cfg(feature = "capture-spantrace")]
+fn install_tracing() {
+    use tracing_error::ErrorLayer;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::{fmt, EnvFilter};
+
+    let fmt_layer = fmt::layer(); //.with_target(false);
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| {
+            EnvFilter::try_new(
+                #[cfg(debug_assertions)]
+                "warn,padington_server=trace",
+                #[cfg(not(debug_assertions))]
+                "warn,padington_server=info",
+            )
+        })
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .with(ErrorLayer::default())
+        .init();
+}
+
+#[instrument]
 #[tokio::main]
-async fn main() {
-    if std::env::var(env_logger::DEFAULT_FILTER_ENV).is_err() {
+async fn main() -> Result<(), Report> {
+    /*if std::env::var(env_logger::DEFAULT_FILTER_ENV).is_err() {
         std::env::set_var(
             env_logger::DEFAULT_FILTER_ENV,
             #[cfg(debug_assertions)]
@@ -64,10 +93,13 @@ async fn main() {
             "warn,padington_server=info",
         );
     }
-    env_logger::init();
+    env_logger::init();*/
+
+    #[cfg(feature = "capture-spantrace")]
+    install_tracing();
 
     let flags = Flags::from_args();
-    let cfg = flags.load_cfg().await.unwrap();
+    let cfg = flags.load_cfg().await.wrap_err("loading config")?;
 
     let addr = cfg.addr.as_str().to_socket_addrs().unwrap().next().unwrap();
 
@@ -75,7 +107,7 @@ async fn main() {
 
     tokio::spawn(LobbyServer::from(lobby_receiver).run());
 
-    let listener = TcpListener::bind(&addr).await.expect("Can't listen");
+    let listener = TcpListener::bind(&addr).await.wrap_err("Can't listen")?;
     info!("Listening on: {}", addr);
 
     match cfg.conn {
@@ -86,13 +118,15 @@ async fn main() {
             .await;
         }
         ConnSetup::Tls { certs, mut keys } => {
+            info!("Setting up TLS ...");
             let mut config = ServerConfig::new(NoClientAuth::new());
-            if keys.len() < 1 {
-                panic!("Key-File contains no keys");
-            }
-            if let Err(e) = config.set_single_cert(certs, keys.remove(0)) {
-                error!("{}", e);
-            }
+            let key = keys
+                .drain(..1)
+                .next()
+                .ok_or_else(|| eyre!("Key-File contains no keys"))?;
+            config
+                .set_single_cert(certs, key)
+                .wrap_err("setting certificate")?;
             let acceptor = TlsAcceptor::from(Arc::new(config));
             wait_for_connections(listener, lobby_sender, |stream: TcpStream| async {
                 let acceptor = acceptor.clone();
@@ -102,4 +136,6 @@ async fn main() {
             .await;
         }
     }
+
+    Ok(())
 }

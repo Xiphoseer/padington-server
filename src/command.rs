@@ -17,13 +17,16 @@ pub enum CommandKind {
     Chat,
     /// steps
     Steps,
+    /// rename
+    Rename,
 }
 
 #[derive(Debug, Clone)]
 pub enum Command {
     Chat(String),
     Steps(usize, String),
-    Init,
+    Rename(String),
+    Init(Option<String>),
     Close,
 }
 
@@ -34,6 +37,7 @@ impl FromStr for CommandKind {
             "init" => Ok(Self::Init),
             "chat" => Ok(Self::Chat),
             "steps" => Ok(Self::Steps),
+            "rename" => Ok(Self::Rename),
             _ => Err(ParseCommandError::UnknownCommand(s.to_owned())),
         }
     }
@@ -55,10 +59,14 @@ impl FromStr for Command {
         let (cmd, arg) = split_arg(input);
 
         match cmd.parse()? {
-            CommandKind::Init => Ok(Command::Init),
+            CommandKind::Init => Ok(Command::Init(arg.map(str::to_owned))),
             CommandKind::Chat => {
                 let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::Chat))?;
                 Ok(Command::Chat(text.to_owned()))
+            }
+            CommandKind::Rename => {
+                let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::Rename))?;
+                Ok(Command::Rename(text.to_owned()))
             }
             CommandKind::Steps => {
                 let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::Steps))?;

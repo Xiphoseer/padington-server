@@ -1,5 +1,5 @@
 use super::{JoinRequest, JoinResponse};
-use crate::channel::{Broadcast, Channel, Request};
+use crate::channel::{Broadcast, Channel, ChannelComms, Request};
 use crate::util::Counter;
 use displaydoc::Display;
 use futures_util::future::{select, Either};
@@ -143,11 +143,13 @@ impl LobbyServer {
 
                                 tokio::spawn(
                                     Channel {
-                                        id: channel_id,
                                         msg_rx: req_rx,
-                                        bct_tx: bct_tx.clone(),
-                                        end_tx: end_tx.clone(),
                                         ter_rx,
+                                        comms: ChannelComms {
+                                            id: channel_id,
+                                            bct_tx: bct_tx.clone(),
+                                            end_tx: end_tx.clone(),
+                                        },
                                     }
                                     .handle_messages(),
                                 );

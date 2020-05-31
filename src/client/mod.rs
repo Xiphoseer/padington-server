@@ -35,11 +35,11 @@ async fn handle_command(
     cmd_res: Result<Command, ParseCommandError>,
 ) -> TResult<CommandRes> {
     match cmd_res {
-        Ok(Command::Init) => {
+        Ok(Command::Init(name)) => {
             let (tx, rx) = oneshot::channel::<InitReply>();
             let req = Request {
                 source: id,
-                kind: RequestKind::Init(tx),
+                kind: RequestKind::Init { response: tx, name },
             };
             if let Err(e) = msg_tx.send(req).await {
                 error!("{:?}", e);
@@ -48,6 +48,8 @@ async fn handle_command(
             match rx.await {
                 Ok(state) => {
                     let msg = format!("init|{}|{}", id.int_val(), state.doc);
+                    ws_sender.send(Message::text(msg)).await?;
+                    let msg = format!("peers|{}", state.j_peers);
                     ws_sender.send(Message::text(msg)).await?;
                     let msg = format!("steps|{}", state.steps);
                     ws_sender.send(Message::text(msg)).await?;
@@ -61,6 +63,16 @@ async fn handle_command(
             let req = Request {
                 source: id,
                 kind: RequestKind::Chat(msg),
+            };
+            if let Err(e) = msg_tx.send(req).await {
+                error!("{:?}", e);
+                return Ok(CommandRes::Break);
+            }
+        }
+        Ok(Command::Rename(new_name)) => {
+            let req = Request {
+                source: id,
+                kind: RequestKind::Rename(new_name),
             };
             if let Err(e) = msg_tx.send(req).await {
                 error!("{:?}", e);
@@ -186,8 +198,12 @@ pub async fn handle_connection(
                                 let msg = format!("chat|{}|{}", id.int_val(), text);
                                 ws_sender.send(Message::text(msg)).await?;
                             }
-                            Broadcast::NewUser(id) => {
-                                let msg = format!("new-user|{}", id.int_val());
+                            Broadcast::NewUser { remote_id, data } => {
+                                let msg = format!("new-user|{}|{}", remote_id.int_val(), data);
+                                ws_sender.send(Message::text(msg)).await?;
+                            }
+                            Broadcast::Rename(id, new_name) => {
+                                let msg = format!("rename|{}|{}", id.int_val(), new_name);
                                 ws_sender.send(Message::text(msg)).await?;
                             }
                             Broadcast::UserLeft(id) => {
