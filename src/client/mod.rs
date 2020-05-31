@@ -14,15 +14,38 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::WebSocketStream;
 use tracing::error;
-use tungstenite::http::uri::Uri;
+use tungstenite::http::{
+    header::SEC_WEBSOCKET_PROTOCOL, response::Response as HttpResponse, status::StatusCode,
+    uri::Uri,
+};
 use tungstenite::{handshake::server, Message, Result as TResult};
 
 fn make_callback(tx: oneshot::Sender<Uri>) -> impl server::Callback {
-    move |http_req: &server::Request, http_rep: server::Response| match tx
-        .send(http_req.uri().clone())
-    {
-        Ok(_) => Ok(http_rep),
-        Err(e) => todo!("{}", e),
+    move |http_req: &server::Request, mut http_rep: server::Response| {
+        let headers = http_req.headers();
+        if let Some(value) = headers.get(SEC_WEBSOCKET_PROTOCOL) {
+            if value == "padington" {
+                http_rep
+                    .headers_mut()
+                    .append(SEC_WEBSOCKET_PROTOCOL, value.clone());
+                match tx.send(http_req.uri().clone()) {
+                    Ok(_) => Ok(http_rep),
+                    Err(e) => todo!("{}", e),
+                }
+            } else {
+                let msg = format!("Invalid protocol {:?}", value);
+                error!("Invalid protocol {:?}", value);
+                let mut rep = HttpResponse::new(Some(msg));
+                *rep.status_mut() = StatusCode::NOT_ACCEPTABLE;
+                Err(rep)
+            }
+        } else {
+            let msg = format!("Missing Sec-WebSocket-Protocol header");
+            error!("Missing Sec-WebSocket-Protocol header");
+            let mut rep = HttpResponse::new(Some(msg));
+            *rep.status_mut() = StatusCode::NOT_ACCEPTABLE;
+            Err(rep)
+        }
     }
 }
 
@@ -203,9 +226,8 @@ pub async fn handle_connection(
     stream: ClientStream,
 ) -> Result<(), Report> {
     let (tx, rx) = oneshot::channel::<Uri>();
-    let ws_stream: WebSocketStream<ClientStream> = accept_hdr_async(stream, make_callback(tx))
-        .await
-        .expect("Failed to accept");
+    let ws_stream: WebSocketStream<ClientStream> =
+        accept_hdr_async(stream, make_callback(tx)).await?;
     let uri: Uri = rx.await.expect("Callback dropped");
     let start_time = Instant::now();
 
