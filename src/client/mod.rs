@@ -3,14 +3,17 @@ use crate::command::{Command, ParseCommandError};
 use crate::lobby::{JoinResponse, LobbyClient, UserID};
 use crate::model::steps::Steps;
 use crate::ClientStream;
+use color_eyre::Report;
 use futures_util::future::{select, Either};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use log::*;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::WebSocketStream;
+use tracing::error;
 use tungstenite::http::uri::Uri;
 use tungstenite::{handshake::server, Message, Result as TResult};
 
@@ -107,8 +110,8 @@ async fn handle_command(
             };
             if let Err(e) = msg_tx.send(req).await {
                 error!("{:?}", e);
-                return Ok(CommandRes::Break);
             }
+            return Ok(CommandRes::Break);
         }
         Err(err) => {
             ws_sender
@@ -119,16 +122,92 @@ async fn handle_command(
     Ok(CommandRes::Continue)
 }
 
+async fn submit_close(id: UserID, msg_tx: &mut mpsc::Sender<Request>) {
+    let close_req = Request {
+        source: id,
+        kind: RequestKind::Close,
+    };
+    match msg_tx.send(close_req).await {
+        Ok(()) => {
+            debug!("Sent {:?}", Command::Close);
+        }
+        Err(e) => {
+            error!("Failed to send {:?} ({:?})", Command::Close, e);
+        }
+    }
+}
+
+async fn handle_broadcast(
+    msg: Broadcast,
+    ws_sender: &mut SplitSink<WebSocketStream<ClientStream>, Message>,
+) -> TResult<()> {
+    match msg {
+        Broadcast::ChatMessage(id, text) => {
+            let msg = format!("chat|{}|{}", id.int_val(), text);
+            ws_sender.send(Message::text(msg)).await?;
+        }
+        Broadcast::NewUser { remote_id, data } => {
+            let msg = format!("new-user|{}|{}", remote_id.int_val(), data);
+            ws_sender.send(Message::text(msg)).await?;
+        }
+        Broadcast::Rename(id, new_name) => {
+            let msg = format!("rename|{}|{}", id.int_val(), new_name);
+            ws_sender.send(Message::text(msg)).await?;
+        }
+        Broadcast::UserLeft(id) => {
+            let msg = format!("user-left|{}", id.int_val());
+            ws_sender.send(Message::text(msg)).await?;
+        }
+        Broadcast::Steps(steps) => {
+            let msg = format!("steps|{}", steps);
+            ws_sender.send(Message::text(msg)).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_message(
+    id: UserID,
+    msg: Message,
+    msg_tx: &mut mpsc::Sender<Request>,
+    ws_sender: &mut SplitSink<WebSocketStream<ClientStream>, Message>,
+) -> Result<CommandRes, Report> {
+    match msg {
+        Message::Text(t) => {
+            let cmd_res = t.parse();
+            handle_command(id, msg_tx, ws_sender, cmd_res).await?;
+        }
+        Message::Binary(b) => {
+            ws_sender.send(Message::binary(b)).await?;
+        }
+        Message::Close(c) => {
+            debug!("WebSocket closed ({:?})", c);
+            submit_close(id, msg_tx).await;
+            return Ok(CommandRes::Break);
+        }
+        Message::Ping(p) => {
+            if let Err(err) = ws_sender.send(Message::Pong(p)).await {
+                error!("Failed to send pong: {}", err);
+                submit_close(id, msg_tx).await;
+                return Ok(CommandRes::Break);
+            }
+        }
+        Message::Pong(_) => {}
+    }
+    Ok(CommandRes::Continue)
+}
+
 pub async fn handle_connection(
     mut lc: LobbyClient,
     peer: SocketAddr,
     stream: ClientStream,
-) -> TResult<()> {
+) -> Result<(), Report> {
     let (tx, rx) = oneshot::channel::<Uri>();
     let ws_stream: WebSocketStream<ClientStream> = accept_hdr_async(stream, make_callback(tx))
         .await
         .expect("Failed to accept");
     let uri: Uri = rx.await.expect("Callback dropped");
+    let start_time = Instant::now();
 
     let channel_path = uri.path();
     let join_response: JoinResponse = lc.join_channel(channel_path).await.unwrap();
@@ -138,94 +217,95 @@ pub async fn handle_connection(
 
     info!("New WebSocket connection: {} to {}", peer, uri);
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-    //let mut interval = tokio::time::interval(Duration::from_millis(1000));
+    let mut interval = tokio::time::interval(Duration::from_millis(1000));
     // Echo incoming WebSocket messages and send a message periodically every second.
 
-    let mut msg_fut = ws_receiver.next();
+    let int_fut = interval.next();
+    let msg_fut = ws_receiver.next();
+
+    let mut int_or_msg_fut = select(msg_fut, int_fut);
     let mut bct_fut = bct_rx.next();
     loop {
-        match select(msg_fut, bct_fut).await {
-            Either::Left((msg, bct_fut_continue)) => {
-                match msg {
-                    Some(msg) => {
-                        let msg = msg?;
+        trace!("Loop iteration");
+        match select(int_or_msg_fut, bct_fut).await {
+            Either::Left((msg_or_int, bct_fut_continue)) => {
+                match msg_or_int {
+                    Either::Left((msg, int_fut_continue)) => {
+                        trace!("Message");
                         match msg {
-                            Message::Text(t) => {
-                                let cmd_res = t.parse();
-                                match handle_command(id, &mut msg_tx, &mut ws_sender, cmd_res)
-                                    .await?
-                                {
-                                    CommandRes::Break => break,
-                                    CommandRes::Continue => {}
-                                }
-                            }
-                            Message::Binary(b) => {
-                                ws_sender.send(Message::binary(b)).await?;
-                            }
-                            Message::Close(c) => {
-                                debug!("WebSocket closed ({:?})", c);
-                                let close_req = Request {
-                                    source: id,
-                                    kind: RequestKind::Close,
-                                };
-                                match msg_tx.send(close_req).await {
-                                    Ok(()) => {
-                                        debug!("Sent {:?}", Command::Close);
-                                    }
+                            Some(msg) => {
+                                let msg = match msg {
                                     Err(e) => {
-                                        error!("Failed to send {:?} ({:?})", Command::Close, e);
+                                        error!("Error on input stream: {}", e);
+                                        submit_close(id, &mut msg_tx).await;
+                                        break;
+                                    }
+                                    Ok(msg) => msg,
+                                };
+
+                                match handle_message(id, msg, &mut msg_tx, &mut ws_sender).await {
+                                    Ok(CommandRes::Break) => break,
+                                    Ok(CommandRes::Continue) => {}
+                                    Err(err) => {
+                                        error!("Could not handle message: {}", err);
+                                        break;
                                     }
                                 }
+                            }
+                            None => {
+                                debug!("WebSocket stream was terminated unexpectedly");
+                                submit_close(id, &mut msg_tx).await;
                                 break;
                             }
-                            _ => {}
+                        };
+
+                        int_or_msg_fut = select(ws_receiver.next(), int_fut_continue);
+                    }
+                    Either::Right((opt_instant, msg_fut_continue)) => {
+                        trace!("Send ping to {}", id);
+                        let time = opt_instant.unwrap();
+                        let dur = time.into_std().duration_since(start_time);
+                        let bytes: [u8; 16] = dur.as_micros().to_le_bytes();
+                        let vec: Vec<u8> = Vec::from(&bytes[..]);
+                        if let Err(err) = ws_sender.send(Message::Ping(vec)).await {
+                            error!("Could not send ping: {}", err);
+                            submit_close(id, &mut msg_tx).await;
+                            break;
                         }
 
-                        bct_fut = bct_fut_continue; // Continue waiting for broadcasts
-                        msg_fut = ws_receiver.next(); // Receive next WebSocket message.
-                    }
-                    None => {
-                        debug!("WebSocket stream was terminated unexpectedly");
-                        break;
-                    }
-                };
-            }
-            Either::Right((bct, msg_fut_continue)) => {
-                if let Some(msg) = bct {
-                    match msg {
-                        Ok(msg) => match msg {
-                            Broadcast::ChatMessage(id, text) => {
-                                let msg = format!("chat|{}|{}", id.int_val(), text);
-                                ws_sender.send(Message::text(msg)).await?;
-                            }
-                            Broadcast::NewUser { remote_id, data } => {
-                                let msg = format!("new-user|{}|{}", remote_id.int_val(), data);
-                                ws_sender.send(Message::text(msg)).await?;
-                            }
-                            Broadcast::Rename(id, new_name) => {
-                                let msg = format!("rename|{}|{}", id.int_val(), new_name);
-                                ws_sender.send(Message::text(msg)).await?;
-                            }
-                            Broadcast::UserLeft(id) => {
-                                let msg = format!("user-left|{}", id.int_val());
-                                ws_sender.send(Message::text(msg)).await?;
-                            }
-                            Broadcast::Steps(steps) => {
-                                let msg = format!("steps|{}", steps);
-                                ws_sender.send(Message::text(msg)).await?;
-                            }
-                        },
-                        Err(err) => {
-                            info!("An error occured: {}", err);
-                        }
+                        int_or_msg_fut = select(msg_fut_continue, interval.next());
                     }
                 }
+                bct_fut = bct_fut_continue; // Continue waiting for broadcasts
+            }
+            Either::Right((bct, int_or_msg_fut_continue)) => {
+                if let Some(msg) = bct {
+                    match msg {
+                        Ok(msg) => {
+                            if let Err(err) = handle_broadcast(msg, &mut ws_sender).await {
+                                error!("Could not send broadcast: {}", err);
+                                //submit_close(id, &mut msg_tx).await;
+                                //break;
+                            }
+                        }
+                        Err(err) => {
+                            error!("Could not recieve broadcast: {}", err);
+                            //submit_close(id, &mut msg_tx).await;
+                            //break;
+                        }
+                    }
+                } else {
+                    // End of stream
+                    info!("End of stream");
+                }
 
-                msg_fut = msg_fut_continue; // Continue receiving the WebSocket message.
+                int_or_msg_fut = int_or_msg_fut_continue; // Continue receiving the WebSocket message.
                 bct_fut = bct_rx.next(); // Wait for next broadcast.
             }
         }
     }
+
+    trace!("Leaving handle_connection");
 
     Ok(())
 }

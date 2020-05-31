@@ -23,13 +23,11 @@ use tokio::sync::mpsc;
 use tokio_rustls::rustls::{NoClientAuth, ServerConfig};
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tokio_tungstenite::stream::Stream;
-use tokio_tungstenite::tungstenite::Error;
 use tracing::{error, info, instrument};
 
 async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStream) {
     if let Err(e) = handle_connection(lc, peer, stream).await {
         match e {
-            Error::ConnectionClosed | Error::Protocol(_) | Error::Utf8 => (),
             err => error!("Error processing connection: {}", err),
         }
     }
@@ -67,7 +65,7 @@ fn install_tracing() {
         .or_else(|_| {
             EnvFilter::try_new(
                 #[cfg(debug_assertions)]
-                "warn,padington_server=trace",
+                "warn,padington_server=debug",
                 #[cfg(not(debug_assertions))]
                 "warn,padington_server=info",
             )
@@ -84,17 +82,6 @@ fn install_tracing() {
 #[instrument]
 #[tokio::main]
 async fn main() -> Result<(), Report> {
-    /*if std::env::var(env_logger::DEFAULT_FILTER_ENV).is_err() {
-        std::env::set_var(
-            env_logger::DEFAULT_FILTER_ENV,
-            #[cfg(debug_assertions)]
-            "warn,padington_server=trace",
-            #[cfg(not(debug_assertions))]
-            "warn,padington_server=info",
-        );
-    }
-    env_logger::init();*/
-
     #[cfg(feature = "capture-spantrace")]
     install_tracing();
 
