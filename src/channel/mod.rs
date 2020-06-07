@@ -5,7 +5,7 @@ pub use doc::DocState;
 use crate::lobby::{ChannelID, UserID};
 use futures_util::future::{select, Either};
 use log::*;
-use prosemirror::markdown::MarkdownSchema;
+use prosemirror::markdown::MD;
 use prosemirror::transform::Steps;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ use tracing::info;
 #[derive(Debug, Serialize)]
 pub struct StepBatch {
     pub src: UserID,
-    pub steps: Steps<MarkdownSchema>,
+    pub steps: Steps<MD>,
 }
 
 #[derive(Debug)]
@@ -39,7 +39,7 @@ pub struct Request {
 pub enum RequestKind {
     Chat(String),
     Rename(String),
-    Steps(usize, Steps<MarkdownSchema>),
+    Steps(usize, Steps<MD>),
     Init {
         response: oneshot::Sender<InitReply>,
         name: Option<String>,
