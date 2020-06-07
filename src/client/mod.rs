@@ -7,6 +7,7 @@ use futures_util::future::{select, Either};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use log::*;
+use prosemirror::markdown::MarkdownSchema;
 use prosemirror::transform::Steps;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -107,7 +108,7 @@ async fn handle_command(
         }
         Ok(Command::Steps(version, string)) => {
             debug!("Step Text: {:?}", string);
-            let steps_res: Result<Steps, _> = serde_json::from_str(&string);
+            let steps_res: Result<Steps<MarkdownSchema>, _> = serde_json::from_str(&string);
 
             match steps_res {
                 Ok(steps) => {
