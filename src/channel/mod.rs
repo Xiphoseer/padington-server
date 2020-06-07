@@ -3,9 +3,9 @@ mod doc;
 pub use doc::DocState;
 
 use crate::lobby::{ChannelID, UserID};
-use crate::model::steps::Steps;
 use futures_util::future::{select, Either};
 use log::*;
+use prosemirror::transform::Steps;
 use serde::Serialize;
 use std::collections::HashMap;
 use tokio::stream::StreamExt;

@@ -1,13 +1,13 @@
 use crate::channel::{Broadcast, InitReply, Request, RequestKind};
 use crate::command::{Command, ParseCommandError};
 use crate::lobby::{JoinResponse, LobbyClient, UserID};
-use crate::model::steps::Steps;
 use crate::ClientStream;
 use color_eyre::Report;
 use futures_util::future::{select, Either};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use log::*;
+use prosemirror::transform::Steps;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};

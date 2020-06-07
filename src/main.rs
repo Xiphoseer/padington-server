@@ -3,7 +3,6 @@ pub mod client;
 pub mod command;
 pub mod config;
 pub mod lobby;
-pub mod model;
 pub mod util;
 
 use crate::client::handle_connection;
