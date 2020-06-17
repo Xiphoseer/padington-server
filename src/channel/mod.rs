@@ -5,8 +5,8 @@ pub use doc::DocState;
 use crate::lobby::{ChannelID, UserID};
 use futures_util::future::{select, Either};
 use log::*;
-use prosemirror::markdown::MD;
-use prosemirror::transform::Steps;
+use prosemirror::markdown::{MarkdownNode, MD};
+use prosemirror::transform::{Step, StepResult, Steps};
 use serde::Serialize;
 use std::collections::HashMap;
 use tokio::stream::StreamExt;
@@ -23,8 +23,8 @@ pub struct StepBatch {
 pub struct InitReply {
     /// The last complete state of the doc
     pub doc: String,
-    /// The steps that are not yet part of the doc
-    pub steps: String,
+    // /// The steps that are not yet part of the doc
+    // pub steps: String,
     /// The peers that are currently in the channel
     pub j_peers: String,
 }
@@ -89,7 +89,7 @@ impl ChannelComms {
         match request.kind {
             RequestKind::Init { response, name } => {
                 let doc = serde_json::to_string(&c_state.doc_state).unwrap();
-                let steps = serde_json::to_string(&c_state.step_buffer).unwrap();
+                // let steps = serde_json::to_string(&c_state.step_buffer).unwrap();
 
                 let new_name = name.unwrap_or_else(|| format!("Bear #{}", id.int_val()));
                 let new_data = UserData { name: new_name };
@@ -107,7 +107,7 @@ impl ChannelComms {
 
                 let reply = InitReply {
                     doc,
-                    steps,
+                    //steps,
                     j_peers,
                 };
 
@@ -136,15 +136,39 @@ impl ChannelComms {
             RequestKind::Steps(version, steps) => {
                 if version == c_state.doc_state.version {
                     info!("Received steps for version {}", version);
-                    for step in &steps {
-                        debug!("Step {:?}", step);
+
+                    fn apply_steps(
+                        doc: &MarkdownNode,
+                        (first, rest): (&Step<MD>, &[Step<MD>]),
+                    ) -> StepResult<MD> {
+                        debug!("Step {:?}", first);
+                        let mut new_doc = first.apply(doc)?;
+                        for step in rest {
+                            debug!("Step {:?}", step);
+                            new_doc = step.apply(&new_doc)?;
+                        }
+                        Ok(new_doc)
                     }
-                    c_state.doc_state.version += steps.len();
-                    let batch = StepBatch { src: id, steps };
-                    let msg = [&batch];
-                    let text = serde_json::to_string(&msg).unwrap();
-                    c_state.step_buffer.push(batch);
-                    self.bct_tx.send(Broadcast::Steps(text)).unwrap();
+
+                    if let Some(fr) = steps.split_first() {
+                        match apply_steps(&c_state.doc_state.doc, fr) {
+                            Ok(new_doc) => {
+                                c_state.doc_state.doc = new_doc;
+                                c_state.doc_state.version += steps.len();
+
+                                let batch = StepBatch { src: id, steps };
+                                let msg = [&batch];
+                                let text = serde_json::to_string(&msg).unwrap();
+                                //c_state.step_buffer.push(batch);
+                                self.bct_tx.send(Broadcast::Steps(text)).unwrap();
+                            }
+                            Err(err) => {
+                                warn!("Failed to apply some step: {:?}", err);
+                            }
+                        }
+                    } else {
+                        debug!("No steps, ignoring!");
+                    }
                 } else {
                     info!("Rejected steps for outdated version {}", version);
                 }
@@ -165,7 +189,7 @@ impl ChannelComms {
 }
 
 pub struct ChannelState {
-    step_buffer: Vec<StepBatch>,
+    //step_buffer: Vec<StepBatch>,
     member_data: HashMap<UserID, UserData>,
     doc_state: DocState,
 }
@@ -173,7 +197,7 @@ pub struct ChannelState {
 impl ChannelState {
     fn new() -> Self {
         ChannelState {
-            step_buffer: Vec::new(),
+            //step_buffer: Vec::new(),
             member_data: HashMap::new(),
             doc_state: DocState {
                 version: 0,

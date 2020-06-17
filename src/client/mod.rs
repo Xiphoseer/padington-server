@@ -78,8 +78,8 @@ async fn handle_command(
                     ws_sender.send(Message::text(msg)).await?;
                     let msg = format!("peers|{}", state.j_peers);
                     ws_sender.send(Message::text(msg)).await?;
-                    let msg = format!("steps|{}", state.steps);
-                    ws_sender.send(Message::text(msg)).await?;
+                    /*let msg = format!("steps|{}", state.steps);
+                    ws_sender.send(Message::text(msg)).await?;*/
                 }
                 Err(err) => {
                     error!("{}", err);
