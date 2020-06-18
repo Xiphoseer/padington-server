@@ -79,6 +79,7 @@ pub struct Channel {
 
 pub struct ChannelComms {
     pub id: ChannelID,
+    pub path: String,
     pub bct_tx: broadcast::Sender<Broadcast>,
     pub end_tx: mpsc::Sender<ChannelID>,
 }

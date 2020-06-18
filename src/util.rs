@@ -16,3 +16,8 @@ impl<T: From<u64>> Counter<T> {
         T::from(id)
     }
 }
+
+pub(crate) enum LoopState<T> {
+    Break(T),
+    Continue,
+}

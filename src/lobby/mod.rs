@@ -3,6 +3,8 @@ pub mod server;
 pub use server::{ChannelID, LobbyServer, UserID};
 
 use crate::channel::{Broadcast, Request};
+use displaydoc::Display;
+use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 #[derive(Debug)]
@@ -15,13 +17,20 @@ pub struct JoinResponse {
 #[derive(Debug)]
 pub struct JoinRequest {
     pub path: String,
-    pub response: oneshot::Sender<JoinResponse>,
+    pub response: oneshot::Sender<Result<JoinResponse, JoinError>>,
 }
 
-#[derive(Debug)]
+/// Error when joining
+#[derive(Debug, Error, Display)]
 pub enum JoinError {
-    RecvFailed(oneshot::error::RecvError),
-    SendFailed(mpsc::error::SendError<JoinRequest>),
+    /// Recieving JoinResponse failed
+    RecvFailed(#[from] oneshot::error::RecvError),
+    /// Sending JoinRequest failed
+    SendFailed(#[from] mpsc::error::SendError<JoinRequest>),
+    /// Invalid path {0:?}
+    InvalidPath(String),
+    /// Is folder {0:?}
+    IsFolder(String),
 }
 
 #[derive(Debug, Clone)]
@@ -38,7 +47,7 @@ impl LobbyClient {
         &mut self,
         path: S,
     ) -> Result<JoinResponse, JoinError> {
-        let (tx, rx) = oneshot::channel::<JoinResponse>();
+        let (tx, rx) = oneshot::channel::<Result<JoinResponse, JoinError>>();
 
         self.0
             .send(JoinRequest {
@@ -48,6 +57,8 @@ impl LobbyClient {
             .await
             .map_err(|err| JoinError::SendFailed(err))?;
 
-        rx.await.map_err(|err| JoinError::RecvFailed(err))
+        let recv_result = rx.await?;
+        let join_response = recv_result?;
+        Ok(join_response)
     }
 }

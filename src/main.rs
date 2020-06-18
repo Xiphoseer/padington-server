@@ -5,6 +5,9 @@ pub mod config;
 pub mod lobby;
 pub mod util;
 
+#[macro_use]
+extern crate derive_new;
+
 use crate::client::handle_connection;
 use crate::config::{ConnSetup, Flags};
 use crate::lobby::{JoinRequest, LobbyClient, LobbyServer};

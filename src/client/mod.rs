@@ -1,8 +1,9 @@
 use crate::channel::{Broadcast, InitReply, Request, RequestKind};
 use crate::command::{Command, ParseCommandError};
-use crate::lobby::{JoinResponse, LobbyClient, UserID};
+use crate::lobby::{JoinError, LobbyClient, UserID};
 use crate::ClientStream;
 use color_eyre::Report;
+use eyre::WrapErr;
 use futures_util::future::{select, Either};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
@@ -229,17 +230,27 @@ pub async fn handle_connection(
     let (tx, rx) = oneshot::channel::<Uri>();
     let ws_stream: WebSocketStream<ClientStream> =
         accept_hdr_async(stream, make_callback(tx)).await?;
-    let uri: Uri = rx.await.expect("Callback dropped");
+    let uri: Uri = rx.await.wrap_err("Callback dropped")?;
     let start_time = Instant::now();
 
+    info!("New WebSocket connection: {} to {}", peer, uri);
+    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+
     let channel_path = uri.path();
-    let join_response: JoinResponse = lc.join_channel(channel_path).await.unwrap();
+    let join_response = match lc.join_channel(channel_path).await {
+        Ok(jr) => jr,
+        Err(JoinError::IsFolder(c)) => {
+            let msg = format!("folder|{}", c);
+            ws_sender.send(Message::text(msg)).await?;
+            ws_sender.send(Message::Close(None)).await?;
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
     let mut msg_tx = join_response.msg_tx;
     let mut bct_rx = join_response.bct_rx;
     let id: UserID = join_response.id;
 
-    info!("New WebSocket connection: {} to {}", peer, uri);
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     let mut interval = tokio::time::interval(Duration::from_millis(1000));
     // Echo incoming WebSocket messages and send a message periodically every second.
 
