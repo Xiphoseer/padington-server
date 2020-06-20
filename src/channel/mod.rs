@@ -3,14 +3,19 @@ mod doc;
 pub use doc::DocState;
 
 use crate::lobby::{ChannelID, UserID};
+use color_eyre::Report;
 use futures_util::future::{select, Either};
 use log::*;
-use prosemirror::markdown::{MarkdownNode, MD};
+use prosemirror::markdown::{from_markdown, to_markdown, MarkdownNode, MD};
 use prosemirror::transform::{Step, StepResult, Steps};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
+use tokio::io::{AsyncReadExt, ErrorKind};
 use tokio::stream::StreamExt;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::{
+    fs::File,
+    sync::{broadcast, mpsc, oneshot},
+};
 use tracing::info;
 
 #[derive(Debug, Serialize)]
@@ -79,7 +84,7 @@ pub struct Channel {
 
 pub struct ChannelComms {
     pub id: ChannelID,
-    pub path: String,
+    pub path: PathBuf,
     pub bct_tx: broadcast::Sender<Broadcast>,
     pub end_tx: mpsc::Sender<ChannelID>,
 }
@@ -189,28 +194,35 @@ impl ChannelComms {
     }
 }
 
+#[derive(new)]
 pub struct ChannelState {
     //step_buffer: Vec<StepBatch>,
+    #[new(default)]
     member_data: HashMap<UserID, UserData>,
     doc_state: DocState,
 }
 
-impl ChannelState {
-    fn new() -> Self {
-        ChannelState {
-            //step_buffer: Vec::new(),
-            member_data: HashMap::new(),
-            doc_state: DocState {
-                version: 0,
-                doc: doc::initial_doc(),
-            },
-        }
-    }
-}
-
 impl Channel {
-    pub async fn handle_messages(mut self) {
-        let mut c_state = ChannelState::new();
+    pub async fn handle_messages(mut self) -> Result<(), Report> {
+        let path = &self.comms.path;
+
+        let doc_state = match File::open(path).await {
+            Ok(mut file) => {
+                let mut buf = String::new();
+                file.read_to_string(&mut buf).await?;
+                let md = from_markdown(&buf)?;
+                DocState::new(md)
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                let doc = doc::initial_doc();
+                let md = to_markdown(&doc)?;
+                tokio::fs::write(path, md).await?;
+                DocState::new(doc)
+            }
+            Err(e) => return Err(Report::from(e)),
+        };
+
+        let mut c_state = ChannelState::new(doc_state);
 
         let mut ter_fut = self.ter_rx;
         let mut msg_fut = self.msg_rx.next();
@@ -221,8 +233,12 @@ impl Channel {
                         Ok(()) => info!("No clients left, terminating"),
                         Err(_) => info!("Server shutdown, terminating"),
                     }
-                    // TODO: shutdown
-                    break;
+
+                    let path = &self.comms.path;
+                    let md = to_markdown(&c_state.doc_state.doc)?;
+                    std::fs::write(path, md)?;
+
+                    break Ok(());
                 }
                 Either::Right((req, ter_fut_continue)) => {
                     if let Some(request) = req {

@@ -2,9 +2,10 @@ use prosemirror::markdown::helper::{blockquote, code_block, doc, h1, h2, node, p
 use prosemirror::markdown::MarkdownNode;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, new)]
 pub struct DocState {
     pub(super) doc: MarkdownNode,
+    #[new(default)]
     pub(super) version: usize,
 }
 

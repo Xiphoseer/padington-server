@@ -1,3 +1,7 @@
+mod folder;
+
+pub use folder::{Folder, PathValidity};
+
 use color_eyre::Report;
 use color_eyre::Result;
 use eyre::{eyre, WrapErr};
@@ -32,6 +36,7 @@ pub enum ConnSetup {
 pub struct Setup {
     pub addr: String,
     pub conn: ConnSetup,
+    pub folder: Folder,
 }
 
 impl Flags {
@@ -54,17 +59,20 @@ impl Flags {
                     return Ok(Setup {
                         addr: addr.to_string(),
                         conn: ConnSetup::Tls { certs, keys },
+                        folder: config.folder,
                     });
                 }
             }
             Ok(Setup {
                 addr: addr.to_string(),
                 conn: ConnSetup::Basic,
+                folder: config.folder,
             })
         } else {
             Ok(Setup {
                 addr: String::from("127.0.0.1:9002"),
                 conn: ConnSetup::Basic,
+                folder: Folder::default(),
             })
         }
     }
@@ -98,6 +106,8 @@ pub struct Config {
     #[serde(deserialize_with = "deserialize_from_str")]
     pub addr: Uri,
     pub tls: Option<Tls>,
+    #[serde(default)]
+    pub folder: Folder,
 }
 
 // You can use this deserializer for any type that implements FromStr

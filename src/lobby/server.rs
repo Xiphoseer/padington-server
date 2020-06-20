@@ -1,14 +1,18 @@
 use super::{JoinError, JoinRequest, JoinResponse};
 use crate::channel::{Broadcast, Channel, ChannelComms, Request};
-use crate::util::{Counter, LoopState};
+use crate::{
+    config::{Folder, PathValidity},
+    util::{Counter, LoopState},
+};
 use displaydoc::Display;
 use futures_util::future::{select, Either};
 use log::*;
 use serde::Serialize;
+use slug::slugify;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::fmt;
+use std::{fmt, path::PathBuf};
 use tokio::stream::StreamExt;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -65,7 +69,7 @@ impl From<u64> for ChannelID {
 pub struct LobbyChannel {
     next_id: Counter<UserID>,
     count: u64,
-    path: String,
+    path: PathBuf,
     bct_tx: broadcast::Sender<Broadcast>,
     req_tx: mpsc::Sender<Request>,
     terminate: oneshot::Sender<()>,
@@ -75,7 +79,7 @@ pub struct LobbyChannel {
 pub struct LobbyState {
     next_id: Counter<ChannelID>,
     channels: HashMap<ChannelID, LobbyChannel>,
-    channel_names: HashMap<String, ChannelID>,
+    channel_names: HashMap<PathBuf, ChannelID>,
 }
 
 impl LobbyState {
@@ -113,92 +117,79 @@ impl LobbyState {
         &mut self,
         msg: JoinRequest,
         end_tx: &mpsc::Sender<ChannelID>,
+        folder: &mut Folder,
     ) {
-        match self.channel_names.entry(msg.path.clone()) {
+        let response = msg.response;
+        let log_join_response = |res: Result<(), Result<JoinResponse, JoinError>>| match res {
+            Ok(()) => {}
+            Err(_) => error!("Client connection dropped while joining"),
+        };
+
+        let mut base_dir = std::env::current_dir().unwrap();
+        base_dir.push("pads");
+
+        let (_used_folder, dir, file) = match folder.check_name(&msg.path, base_dir) {
+            PathValidity::Invalid => {
+                log_join_response(response.send(Err(JoinError::InvalidPath(msg.path))));
+                return;
+            }
+            PathValidity::Folder(used_folder, _dir) => {
+                log_join_response(
+                    response.send(Err(JoinError::IsFolder(format!("{:?}", used_folder)))),
+                );
+                return;
+            }
+            PathValidity::File(used_folder, dir, file) => {
+                info!("loading file {:?} {:?} {:?}", used_folder, dir, file);
+                (used_folder, dir, file)
+            }
+        };
+
+        let file_slug: String = slugify(file);
+        let mut file = dir.as_path().join(file_slug);
+        file.set_extension("md");
+
+        match self.channel_names.entry(file.clone()) {
             Entry::Vacant(v) => {
-                /// The type of file
-                enum PathValidity<'a> {
-                    Invalid,
-                    File(Vec<&'a str>, &'a str),
-                    Folder(Vec<&'a str>),
-                }
-                /// Checks the name for validity
-                fn check_name(path: &str) -> PathValidity {
-                    let mut iter = path.split('/');
-                    if let Some("") = iter.next() {
-                        let mut components: Vec<&str> = iter.collect();
-                        if let Some(file) = components.pop() {
-                            if components.iter().all(|c| {
-                                c.len() > 0
-                                    && c.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                            }) {
-                                if file == "" {
-                                    PathValidity::Folder(components)
-                                } else {
-                                    PathValidity::File(components, file)
-                                }
-                            } else {
-                                PathValidity::Invalid
-                            }
-                        } else {
-                            PathValidity::Invalid
-                        }
-                    } else {
-                        PathValidity::Invalid
-                    }
-                }
-
-                let response = msg.response;
-                let send_join_response =
-                    |rep: Result<JoinResponse, JoinError>| match response.send(rep) {
-                        Ok(()) => {}
-                        Err(_) => error!("Client connection dropped while joining"),
-                    };
-
-                match check_name(&msg.path) {
-                    PathValidity::Invalid => {
-                        send_join_response(Err(JoinError::InvalidPath(msg.path)));
-                        return;
-                    }
-                    PathValidity::Folder(components) => {
-                        send_join_response(Err(JoinError::IsFolder(format!("{:?}", components))));
-                        return;
-                    }
-                    PathValidity::File(components, file) => {
-                        info!("loading file {:?} {:?}", components, file);
-                    }
-                }
-
                 let (req_tx, req_rx) = mpsc::channel(100);
                 let (bct_tx, bct_rx) = broadcast::channel(100);
                 let (ter_tx, ter_rx) = oneshot::channel::<()>();
                 let channel_id = self.next_id.next();
 
-                tokio::spawn(
-                    Channel {
-                        msg_rx: req_rx,
-                        ter_rx,
-                        comms: ChannelComms {
-                            id: channel_id,
-                            path: msg.path.clone(),
-                            bct_tx: bct_tx.clone(),
-                            end_tx: end_tx.clone(),
-                        },
+                tokio::spawn({
+                    let end_tx = end_tx.clone();
+                    let bct_tx = bct_tx.clone();
+                    let path = file.clone();
+                    async move {
+                        let res = Channel {
+                            msg_rx: req_rx,
+                            ter_rx,
+                            comms: ChannelComms {
+                                id: channel_id,
+                                path,
+                                bct_tx,
+                                end_tx,
+                            },
+                        }
+                        .handle_messages()
+                        .await;
+                        if let Err(report) = res {
+                            error!("{}", report);
+                        }
                     }
-                    .handle_messages(),
-                );
+                });
 
                 let mut next_id = Counter::default();
 
-                send_join_response(Ok(JoinResponse {
+                log_join_response(response.send(Ok(JoinResponse {
                     id: next_id.next(),
                     msg_tx: req_tx.clone(),
                     bct_rx,
-                }));
+                })));
 
                 self.channels.insert(
                     channel_id,
-                    LobbyChannel::new(next_id, 1, msg.path, bct_tx, req_tx, ter_tx),
+                    LobbyChannel::new(next_id, 1, file, bct_tx, req_tx, ter_tx),
                 );
                 v.insert(channel_id);
             }
@@ -208,11 +199,12 @@ impl LobbyState {
                 channel.count += 1;
 
                 let id = channel.next_id.next();
-                match msg.response.send(Ok(JoinResponse {
+                let res = response.send(Ok(JoinResponse {
                     id,
                     msg_tx: channel.req_tx.clone(),
                     bct_rx: channel.bct_tx.subscribe(),
-                })) {
+                }));
+                match res {
                     Ok(()) => {
                         info!("Accepted client {} into channel {}", id, channel_id);
                     }
@@ -225,19 +217,12 @@ impl LobbyState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, new)]
 pub struct LobbyServer {
     inner: mpsc::Receiver<JoinRequest>,
+    #[new(default)]
     state: LobbyState,
-}
-
-impl From<mpsc::Receiver<JoinRequest>> for LobbyServer {
-    fn from(inner: mpsc::Receiver<JoinRequest>) -> Self {
-        Self {
-            inner,
-            state: LobbyState::default(),
-        }
-    }
+    folder: Folder,
 }
 
 impl LobbyServer {
@@ -260,7 +245,9 @@ impl LobbyServer {
                 }
                 Either::Right((msg, sig_fut_continue)) => {
                     if let Some(msg) = msg {
-                        self.state.handle_join_request(msg, &end_tx).await;
+                        self.state
+                            .handle_join_request(msg, &end_tx, &mut self.folder)
+                            .await;
                     } else {
                         trace!("JoinRequest stream broke!");
                     }

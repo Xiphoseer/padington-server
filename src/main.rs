@@ -9,7 +9,7 @@ pub mod util;
 extern crate derive_new;
 
 use crate::client::handle_connection;
-use crate::config::{ConnSetup, Flags};
+use crate::config::{ConnSetup, Flags, Setup};
 use crate::lobby::{JoinRequest, LobbyClient, LobbyServer};
 use color_eyre::Report;
 use eyre::{eyre, WrapErr};
@@ -87,14 +87,14 @@ async fn main() -> Result<(), Report> {
     #[cfg(feature = "capture-spantrace")]
     install_tracing();
 
-    let flags = Flags::from_args();
-    let cfg = flags.load_cfg().await.wrap_err("loading config")?;
+    let flags: Flags = Flags::from_args();
+    let cfg: Setup = flags.load_cfg().await.wrap_err("loading config")?;
 
     let addr = cfg.addr.as_str().to_socket_addrs().unwrap().next().unwrap();
 
     let (lobby_sender, lobby_receiver) = mpsc::channel(100);
 
-    tokio::spawn(LobbyServer::from(lobby_receiver).run());
+    tokio::spawn(LobbyServer::new(lobby_receiver, cfg.folder).run());
 
     let listener = TcpListener::bind(&addr).await.wrap_err("Can't listen")?;
     info!("Listening on: {}", addr);

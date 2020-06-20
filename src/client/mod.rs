@@ -236,7 +236,7 @@ pub async fn handle_connection(
     info!("New WebSocket connection: {} to {}", peer, uri);
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    let channel_path = uri.path();
+    let channel_path = urlencoding::decode(uri.path())?;
     let join_response = match lc.join_channel(channel_path).await {
         Ok(jr) => jr,
         Err(JoinError::IsFolder(c)) => {
