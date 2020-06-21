@@ -6,6 +6,7 @@ use std::{collections::HashMap, path::PathBuf, str::Split};
 #[derive(Default, Debug, Deserialize)]
 pub struct Folder {
     /// The directory to save the files to
+    #[serde(default)]
     save_dir: Option<PathBuf>,
 
     /// The channels that are currently active
@@ -13,6 +14,7 @@ pub struct Folder {
     channels: HashMap<String, ChannelID>,
 
     /// The subfolders from this folder
+    #[serde(default)]
     sub: HashMap<String, Folder>,
 }
 
