@@ -1,6 +1,9 @@
+//! # Padington commands
+
 use displaydoc::Display;
 use std::str::FromStr;
 
+/// Error when parsing a command
 #[derive(Display)]
 pub enum ParseCommandError {
     /// The command expected an argument (e.g. `{0}|foo`)
@@ -9,6 +12,7 @@ pub enum ParseCommandError {
     UnknownCommand(String),
 }
 
+/// A kind of incoming command
 #[derive(Display)]
 pub enum CommandKind {
     /// init
@@ -17,17 +21,27 @@ pub enum CommandKind {
     Chat,
     /// steps
     Steps,
-    /// rename
-    Rename,
+    /// update
+    Update,
+    /// webrtc
+    WebRTC,
 }
 
+/// An incoming command
 #[derive(Debug, Clone)]
 pub enum Command {
+    /// A chat message
     Chat(String),
+    /// Steps from the server
     Steps(usize, String),
-    Rename(String),
+    /// A renamed user
+    Update(String),
+    /// Initialize with an intended name
     Init(Option<String>),
+    /// Close the connection
     Close,
+    /// A WebRTC signal for a client
+    WebRTC(u64, String),
 }
 
 impl FromStr for CommandKind {
@@ -37,7 +51,8 @@ impl FromStr for CommandKind {
             "init" => Ok(Self::Init),
             "chat" => Ok(Self::Chat),
             "steps" => Ok(Self::Steps),
-            "rename" => Ok(Self::Rename),
+            "update" => Ok(Self::Update),
+            "webrtc" => Ok(Self::WebRTC),
             _ => Err(ParseCommandError::UnknownCommand(s.to_owned())),
         }
     }
@@ -64,9 +79,19 @@ impl FromStr for Command {
                 let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::Chat))?;
                 Ok(Command::Chat(text.to_owned()))
             }
-            CommandKind::Rename => {
-                let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::Rename))?;
-                Ok(Command::Rename(text.to_owned()))
+            CommandKind::Update => {
+                let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::Update))?;
+                Ok(Command::Update(text.to_owned()))
+            }
+            CommandKind::WebRTC => {
+                let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::WebRTC))?;
+                let (reciever_str, opt_payload) = split_arg(text);
+                let payload =
+                    opt_payload.ok_or(ParseCommandError::MissingArg(CommandKind::WebRTC))?;
+                let reciever: u64 = reciever_str
+                    .parse()
+                    .map_err(|_| ParseCommandError::MissingArg(CommandKind::WebRTC))?;
+                Ok(Command::WebRTC(reciever, payload.to_owned()))
             }
             CommandKind::Steps => {
                 let text = arg.ok_or(ParseCommandError::MissingArg(CommandKind::Steps))?;

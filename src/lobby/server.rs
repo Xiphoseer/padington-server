@@ -17,12 +17,14 @@ use tokio::stream::StreamExt;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 macro_rules! make_id {
-    ($name:ident, $key:literal) => {
+    (#[$doc:meta] $name:ident, $key:literal) => {
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
         #[serde(into = "u64", from = "u64")]
+        #[$doc]
         pub struct $name(u64);
 
         impl $name {
+            /// Integer value
             pub fn int_val(&self) -> u64 {
                 self.0
             }
@@ -48,7 +50,11 @@ macro_rules! make_id {
     };
 }
 
-make_id!(UserID, "user#{0}");
+make_id!(
+    /// ID for a client/user
+    UserID,
+    "user#{0}"
+);
 
 #[derive(Copy, Clone, Debug, Display, PartialEq, Eq, Hash)]
 /// channel#{0}
@@ -217,6 +223,7 @@ impl LobbyState {
     }
 }
 
+/// The task for the lobby
 #[derive(Debug, new)]
 pub struct LobbyServer {
     inner: mpsc::Receiver<JoinRequest>,
@@ -226,6 +233,7 @@ pub struct LobbyServer {
 }
 
 impl LobbyServer {
+    /// The main loop of the server
     pub async fn run(mut self) {
         let (end_tx, mut end_rx) = mpsc::channel::<ChannelID>(5);
 

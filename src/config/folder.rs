@@ -20,9 +20,13 @@ pub struct Folder {
 
 /// The type of file
 pub enum PathValidity<'a, 'b> {
+    /// The path is not valid
     Invalid,
+    /// The path is a file (shared text document)
     File(&'b mut Folder, PathBuf, &'a str),
+    /// The path is a folder (choose a file)
     Folder(&'b mut Folder, PathBuf),
+    // IDEA: game / map
 }
 
 /// Checks the name for validity
@@ -54,6 +58,7 @@ impl Folder {
         }
     }
 
+    /// Check a provided path against this folder
     pub fn check_name<'a, 'b>(
         &'b mut self,
         path: &'a str,

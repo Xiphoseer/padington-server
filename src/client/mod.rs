@@ -1,4 +1,6 @@
-use crate::channel::{Broadcast, InitReply, Request, RequestKind};
+//! # Connections to clients
+
+use crate::channel::{Broadcast, InitReply, Request, RequestKind, Signal, SignalKind, UserConfig};
 use crate::command::{Command, ParseCommandError};
 use crate::lobby::{JoinError, LobbyClient, UserID};
 use crate::ClientStream;
@@ -21,6 +23,8 @@ use tungstenite::http::{
     uri::Uri,
 };
 use tungstenite::{handshake::server, Message, Result as TResult};
+
+type WsSender = SplitSink<WebSocketStream<ClientStream>, Message>;
 
 fn make_callback(tx: oneshot::Sender<Uri>) -> impl server::Callback {
     move |http_req: &server::Request, mut http_rep: server::Response| {
@@ -58,8 +62,9 @@ enum CommandRes {
 
 async fn handle_command(
     id: UserID,
+    sig_tx: &mut mpsc::Sender<Signal>,
     msg_tx: &mut mpsc::Sender<Request>,
-    ws_sender: &mut SplitSink<WebSocketStream<ClientStream>, Message>,
+    ws_sender: &mut WsSender,
     cmd_res: Result<Command, ParseCommandError>,
 ) -> TResult<CommandRes> {
     match cmd_res {
@@ -67,7 +72,11 @@ async fn handle_command(
             let (tx, rx) = oneshot::channel::<InitReply>();
             let req = Request {
                 source: id,
-                kind: RequestKind::Init { response: tx, name },
+                kind: RequestKind::Init {
+                    response: tx,
+                    name,
+                    sig_tx: sig_tx.clone(),
+                },
             };
             if let Err(e) = msg_tx.send(req).await {
                 error!("{:?}", e);
@@ -79,8 +88,6 @@ async fn handle_command(
                     ws_sender.send(Message::text(msg)).await?;
                     let msg = format!("peers|{}", state.j_peers);
                     ws_sender.send(Message::text(msg)).await?;
-                    /*let msg = format!("steps|{}", state.steps);
-                    ws_sender.send(Message::text(msg)).await?;*/
                 }
                 Err(err) => {
                     error!("{}", err);
@@ -97,14 +104,46 @@ async fn handle_command(
                 return Ok(CommandRes::Break);
             }
         }
-        Ok(Command::Rename(new_name)) => {
-            let req = Request {
-                source: id,
-                kind: RequestKind::Rename(new_name),
-            };
-            if let Err(e) = msg_tx.send(req).await {
-                error!("{:?}", e);
-                return Ok(CommandRes::Break);
+        Ok(Command::Update(payload)) => {
+            let update: Result<UserConfig, _> = serde_json::from_str(&payload);
+            match update {
+                Ok(cfg) => {
+                    let req = Request {
+                        source: id,
+                        kind: RequestKind::Update(cfg),
+                    };
+                    if let Err(e) = msg_tx.send(req).await {
+                        error!("{:?}", e);
+                        return Ok(CommandRes::Break);
+                    }
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    return Ok(CommandRes::Break);
+                }
+            }
+        }
+        Ok(Command::WebRTC(reciever, payload)) => {
+            let value: Result<serde_json::Value, _> = serde_json::from_str(&payload);
+            match value {
+                Ok(value) => {
+                    let req = Request {
+                        source: id,
+                        kind: RequestKind::Signal(Signal {
+                            sender: id,
+                            reciever: UserID::from(reciever),
+                            kind: SignalKind::WebRTC(value),
+                        }),
+                    };
+                    if let Err(e) = msg_tx.send(req).await {
+                        error!("{:?}", e);
+                        return Ok(CommandRes::Break);
+                    }
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    return Ok(CommandRes::Break);
+                }
             }
         }
         Ok(Command::Steps(version, string)) => {
@@ -162,10 +201,7 @@ async fn submit_close(id: UserID, msg_tx: &mut mpsc::Sender<Request>) {
     }
 }
 
-async fn handle_broadcast(
-    msg: Broadcast,
-    ws_sender: &mut SplitSink<WebSocketStream<ClientStream>, Message>,
-) -> TResult<()> {
+async fn handle_broadcast(msg: Broadcast, ws_sender: &mut WsSender) -> TResult<()> {
     match msg {
         Broadcast::ChatMessage(id, text) => {
             let msg = format!("chat|{}|{}", id.int_val(), text);
@@ -175,8 +211,12 @@ async fn handle_broadcast(
             let msg = format!("new-user|{}|{}", remote_id.int_val(), data);
             ws_sender.send(Message::text(msg)).await?;
         }
-        Broadcast::Rename(id, new_name) => {
-            let msg = format!("rename|{}|{}", id.int_val(), new_name);
+        Broadcast::Update(id, cfg) => {
+            let msg = format!(
+                "update|{}|{}",
+                id.int_val(),
+                serde_json::to_string(&cfg).unwrap()
+            );
             ws_sender.send(Message::text(msg)).await?;
         }
         Broadcast::UserLeft(id) => {
@@ -191,16 +231,31 @@ async fn handle_broadcast(
     Ok(())
 }
 
+async fn handle_signal(signal: Signal, ws_sender: &mut WsSender) -> TResult<()> {
+    match signal.kind {
+        SignalKind::WebRTC(payload) => {
+            let msg = format!(
+                "webrtc|{}|{}",
+                signal.sender.int_val(),
+                serde_json::to_string(&payload).unwrap()
+            );
+            ws_sender.send(Message::text(msg)).await?;
+        }
+    }
+    Ok(())
+}
+
 async fn handle_message(
     id: UserID,
     msg: Message,
+    sig_tx: &mut mpsc::Sender<Signal>,
     msg_tx: &mut mpsc::Sender<Request>,
-    ws_sender: &mut SplitSink<WebSocketStream<ClientStream>, Message>,
+    ws_sender: &mut WsSender,
 ) -> Result<CommandRes, Report> {
     match msg {
         Message::Text(t) => {
             let cmd_res = t.parse();
-            handle_command(id, msg_tx, ws_sender, cmd_res).await?;
+            handle_command(id, sig_tx, msg_tx, ws_sender, cmd_res).await?;
         }
         Message::Binary(b) => {
             ws_sender.send(Message::binary(b)).await?;
@@ -222,6 +277,7 @@ async fn handle_message(
     Ok(CommandRes::Continue)
 }
 
+/// Handle an incoming connection
 pub async fn handle_connection(
     mut lc: LobbyClient,
     peer: SocketAddr,
@@ -254,15 +310,20 @@ pub async fn handle_connection(
     let mut interval = tokio::time::interval(Duration::from_millis(1000));
     // Echo incoming WebSocket messages and send a message periodically every second.
 
+    let (mut sig_tx, mut sig_rx) = mpsc::channel::<Signal>(20);
+
     let int_fut = interval.next();
     let msg_fut = ws_receiver.next();
 
+    let bct_fut = bct_rx.next();
+    let sig_fut = sig_rx.next();
+
     let mut int_or_msg_fut = select(msg_fut, int_fut);
-    let mut bct_fut = bct_rx.next();
+    let mut bct_or_sig_fut = select(bct_fut, sig_fut);
     loop {
         trace!("Loop iteration");
-        match select(int_or_msg_fut, bct_fut).await {
-            Either::Left((msg_or_int, bct_fut_continue)) => {
+        match select(int_or_msg_fut, bct_or_sig_fut).await {
+            Either::Left((msg_or_int, bct_or_sig_fut_continue)) => {
                 match msg_or_int {
                     Either::Left((msg, int_fut_continue)) => {
                         trace!("Message");
@@ -277,7 +338,15 @@ pub async fn handle_connection(
                                     Ok(msg) => msg,
                                 };
 
-                                match handle_message(id, msg, &mut msg_tx, &mut ws_sender).await {
+                                match handle_message(
+                                    id,
+                                    msg,
+                                    &mut sig_tx,
+                                    &mut msg_tx,
+                                    &mut ws_sender,
+                                )
+                                .await
+                                {
                                     Ok(CommandRes::Break) => break,
                                     Ok(CommandRes::Continue) => {}
                                     Err(err) => {
@@ -310,31 +379,47 @@ pub async fn handle_connection(
                         int_or_msg_fut = select(msg_fut_continue, interval.next());
                     }
                 }
-                bct_fut = bct_fut_continue; // Continue waiting for broadcasts
+                bct_or_sig_fut = bct_or_sig_fut_continue; // Continue waiting for broadcasts
             }
-            Either::Right((bct, int_or_msg_fut_continue)) => {
-                if let Some(msg) = bct {
-                    match msg {
-                        Ok(msg) => {
-                            if let Err(err) = handle_broadcast(msg, &mut ws_sender).await {
-                                error!("Could not send broadcast: {}", err);
-                                //submit_close(id, &mut msg_tx).await;
-                                //break;
+            Either::Right((bct_or_sig, int_or_msg_fut_continue)) => {
+                match bct_or_sig {
+                    Either::Left((bct, sig_fut_continue)) => {
+                        if let Some(msg) = bct {
+                            match msg {
+                                Ok(msg) => {
+                                    if let Err(err) = handle_broadcast(msg, &mut ws_sender).await {
+                                        error!("Could not send broadcast: {}", err);
+                                        //submit_close(id, &mut msg_tx).await;
+                                        //break;
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("Could not recieve broadcast: {}", err);
+                                    //submit_close(id, &mut msg_tx).await;
+                                    //break;
+                                }
                             }
+                        } else {
+                            // End of stream
+                            info!("End of stream");
                         }
-                        Err(err) => {
-                            error!("Could not recieve broadcast: {}", err);
-                            //submit_close(id, &mut msg_tx).await;
-                            //break;
-                        }
+
+                        // Wait for next broadcast.
+                        bct_or_sig_fut = select(bct_rx.next(), sig_fut_continue);
                     }
-                } else {
-                    // End of stream
-                    info!("End of stream");
+                    Either::Right((sig, bct_fut_continue)) => {
+                        if let Some(signal) = sig {
+                            if let Err(err) = handle_signal(signal, &mut ws_sender).await {
+                                warn!("Could not handle signal {:?}", err);
+                            }
+                        } else {
+                            // None signal, end of stream
+                        }
+                        bct_or_sig_fut = select(bct_fut_continue, sig_rx.next());
+                    }
                 }
 
                 int_or_msg_fut = int_or_msg_fut_continue; // Continue receiving the WebSocket message.
-                bct_fut = bct_rx.next(); // Wait for next broadcast.
             }
         }
     }

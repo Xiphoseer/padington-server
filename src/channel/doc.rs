@@ -2,6 +2,7 @@ use prosemirror::markdown::helper::{blockquote, code_block, doc, h1, h2, node, p
 use prosemirror::markdown::MarkdownNode;
 use serde::Serialize;
 
+/// Current state of the shared document
 #[derive(Debug, Clone, Serialize, new)]
 pub struct DocState {
     pub(super) doc: MarkdownNode,

@@ -1,3 +1,5 @@
+//! # Server configuration
+
 mod folder;
 
 pub use folder::{Folder, PathValidity};
@@ -19,28 +21,40 @@ use tungstenite::http::Uri;
 use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
 use tokio_rustls::rustls::{Certificate, PrivateKey};
 
+/// The commandline flags for the server
 #[derive(Debug, StructOpt)]
 pub struct Flags {
+    /// Which config file to use
     #[structopt(long = "cfg", short = "c")]
     pub cfg: Option<PathBuf>,
 }
 
+/// The type of connection we want
 pub enum ConnSetup {
+    /// A simple connection (localhost or behind a web-server)
     Basic,
+    /// A TLS connection set up within this service
     Tls {
+        /// The loaded keys
         keys: Vec<PrivateKey>,
+        /// The loaded certificates
         certs: Vec<Certificate>,
     },
 }
 
+/// The setup that we are actually using
 pub struct Setup {
+    /// The address to bind to
     pub addr: String,
+    /// The kind of connection we use
     pub conn: ConnSetup,
+    /// The folder we use
     pub folder: Folder,
 }
 
 impl Flags {
     #[instrument]
+    /// Load the configuration from a file
     pub async fn load_cfg(&self) -> Result<Setup, Report> {
         if let Some(cfg) = &self.cfg {
             let cfg_string: String = read_to_string(cfg)
@@ -78,15 +92,20 @@ impl Flags {
     }
 }
 
+/// The TLS config options
 #[derive(Debug, Deserialize)]
 pub struct Tls {
+    /// Whether the TLS config is actually used
     pub enabled: bool,
+    /// Which certificate file to use
     pub cert: PathBuf,
+    /// Which key file to use
     pub key: PathBuf,
 }
 
 impl Tls {
     #[instrument]
+    /// Load the TLS certificates
     pub fn load_certs(&self) -> Result<Vec<Certificate>> {
         let path = &self.cert;
         let file = File::open(path)?;
@@ -94,6 +113,7 @@ impl Tls {
     }
 
     #[instrument]
+    /// Load the TLS keys
     pub fn load_keys(&self) -> Result<Vec<PrivateKey>> {
         let path = &self.key;
         let file = File::open(path)?;
@@ -101,11 +121,15 @@ impl Tls {
     }
 }
 
+/// A configuration for the system
 #[derive(Deserialize)]
 pub struct Config {
+    /// The address to bind the service to
     #[serde(deserialize_with = "deserialize_from_str")]
     pub addr: Uri,
+    /// The TLS options
     pub tls: Option<Tls>,
+    /// The folder options
     #[serde(default)]
     pub folder: Folder,
 }

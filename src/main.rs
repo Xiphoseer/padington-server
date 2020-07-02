@@ -1,3 +1,6 @@
+//! # Server for the `padington` protocol
+#![warn(missing_docs)]
+
 pub mod channel;
 pub mod client;
 pub mod command;
