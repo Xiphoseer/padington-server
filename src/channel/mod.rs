@@ -226,7 +226,9 @@ impl ChannelComms {
                 if let Some(audio) = &cfg.audio {
                     member.audio = *audio;
                 }
-                self.bct_tx.send(Broadcast::Update(id, cfg)).unwrap();
+                if let Err(e) = self.bct_tx.send(Broadcast::Update(id, cfg)) {
+                    error!("Error sending broadcast {:?}", e);
+                }
             }
             RequestKind::Signal(signal) => {
                 let member = c_state.member_data.get_mut(&signal.reciever).unwrap();

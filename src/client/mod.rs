@@ -108,6 +108,7 @@ async fn handle_command(
             let update: Result<UserConfig, _> = serde_json::from_str(&payload);
             match update {
                 Ok(cfg) => {
+                    debug!("Recieved Update {:?} from {:?}", cfg, id);
                     let req = Request {
                         source: id,
                         kind: RequestKind::Update(cfg),
@@ -212,6 +213,7 @@ async fn handle_broadcast(msg: Broadcast, ws_sender: &mut WsSender) -> TResult<(
             ws_sender.send(Message::text(msg)).await?;
         }
         Broadcast::Update(id, cfg) => {
+            debug!("Sending update {:?} for {:?}", cfg, id);
             let msg = format!(
                 "update|{}|{}",
                 id.int_val(),
