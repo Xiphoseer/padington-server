@@ -131,7 +131,10 @@ struct UserData {
 impl UserData {
     /// Get the subset of that data that is public
     fn public<'a>(&'a self) -> PublicMemberData<'a> {
-        PublicMemberData { name: &self.name }
+        PublicMemberData {
+            name: &self.name,
+            audio: self.audio,
+        }
     }
 }
 
@@ -139,6 +142,7 @@ impl UserData {
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicMemberData<'a> {
     name: &'a str,
+    audio: bool,
 }
 
 /// The channel
@@ -232,6 +236,7 @@ impl ChannelComms {
             }
             RequestKind::Signal(signal) => {
                 let member = c_state.member_data.get_mut(&signal.reciever).unwrap();
+                trace!("{:?}", signal);
                 if let Err(s) = member.sig_tx.send(signal).await {
                     warn!("Failed to send signal {:?}", s);
                 }
