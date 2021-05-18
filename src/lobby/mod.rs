@@ -69,7 +69,7 @@ impl LobbyClient {
                 response: tx,
             })
             .await
-            .map_err(|err| JoinError::SendFailed(err))?;
+            .map_err(JoinError::SendFailed)?;
 
         let recv_result = rx.await?;
         let join_response = recv_result?;

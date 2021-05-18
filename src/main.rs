@@ -32,9 +32,7 @@ use tracing::{error, info, instrument};
 
 async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStream) {
     if let Err(e) = handle_connection(lc, peer, stream).await {
-        match e {
-            err => error!("Error processing connection: {}", err),
-        }
+        error!("Error processing connection: {}", e)
     }
 }
 

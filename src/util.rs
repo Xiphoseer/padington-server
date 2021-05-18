@@ -13,6 +13,20 @@ impl<T> Default for Counter<T> {
     }
 }
 
+/*impl <T: From<u64>> Iterator for Counter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(next) = self.0.checked_add(1) {
+            let id = self.0;
+            self.0 = next;
+            Some(T::from(id))
+        } else {
+            None
+        }
+    }
+}*/
+
+#[allow(clippy::should_implement_trait)]
 impl<T: From<u64>> Counter<T> {
     /// Get the next value from this counter
     pub fn next(&mut self) -> T {

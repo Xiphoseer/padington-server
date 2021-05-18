@@ -46,7 +46,7 @@ fn make_callback(tx: oneshot::Sender<Uri>) -> impl server::Callback {
                 Err(rep)
             }
         } else {
-            let msg = format!("Missing Sec-WebSocket-Protocol header");
+            let msg = "Missing Sec-WebSocket-Protocol header".to_string();
             error!("Missing Sec-WebSocket-Protocol header");
             let mut rep = HttpResponse::new(Some(msg));
             *rep.status_mut() = StatusCode::NOT_ACCEPTABLE;

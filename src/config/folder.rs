@@ -50,7 +50,7 @@ impl Folder {
                     PathValidity::Invalid
                 }
             }
-            None if curr == "" => {
+            None if curr.is_empty() => {
                 // curr is the file name
                 PathValidity::Folder(self, base_dir)
             }

@@ -1,1 +1,1 @@
-web: ./target/release/padington-server
+web: ./target/release/padington-server --port $PORT

@@ -27,6 +27,9 @@ pub struct Flags {
     /// Which config file to use
     #[structopt(long = "cfg", short = "c")]
     pub cfg: Option<PathBuf>,
+    /// Which port to use (if cfg isn't present)
+    #[structopt(long = "port", short = "p")]
+    pub port: Option<u16>,
 }
 
 /// The type of connection we want
@@ -81,6 +84,12 @@ impl Flags {
                 addr: addr.to_string(),
                 conn: ConnSetup::Basic,
                 folder: config.folder,
+            })
+        } else if let Some(port) = self.port {
+            Ok(Setup {
+                addr: format!("0.0.0.0:{}", port),
+                conn: ConnSetup::Basic,
+                folder: Folder::default(),
             })
         } else {
             Ok(Setup {

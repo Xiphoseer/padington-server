@@ -130,7 +130,7 @@ struct UserData {
 
 impl UserData {
     /// Get the subset of that data that is public
-    fn public<'a>(&'a self) -> PublicMemberData<'a> {
+    fn public(&self) -> PublicMemberData {
         PublicMemberData {
             name: &self.name,
             audio: self.audio,
@@ -225,7 +225,7 @@ impl ChannelComms {
                 if let Some(new_name) = &cfg.name {
                     let old_name = &mut member.name;
                     info!({from = old_name.as_str(), to= new_name.as_str()}, "{} changed their name", id);
-                    std::mem::replace(old_name, new_name.clone());
+                    *old_name = new_name.clone();
                 }
                 if let Some(audio) = &cfg.audio {
                     member.audio = *audio;
