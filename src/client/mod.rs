@@ -19,8 +19,11 @@ use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::WebSocketStream;
 use tracing::error;
 use tungstenite::http::{
-    header::SEC_WEBSOCKET_PROTOCOL, response::Response as HttpResponse, status::StatusCode,
+    header::SEC_WEBSOCKET_PROTOCOL,
+    response::Response as HttpResponse,
+    status::StatusCode,
     uri::Uri,
+    HeaderValue,
 };
 use tungstenite::{handshake::server, Message, Result as TResult};
 
@@ -31,9 +34,12 @@ fn make_callback(tx: oneshot::Sender<Uri>) -> impl server::Callback {
         let headers = http_req.headers();
         if let Some(value) = headers.get(SEC_WEBSOCKET_PROTOCOL) {
             if value == "padington" {
-                http_rep
-                    .headers_mut()
-                    .append(SEC_WEBSOCKET_PROTOCOL, value.clone());
+                let headers = http_rep.headers_mut();
+                headers.append(SEC_WEBSOCKET_PROTOCOL, value.clone());
+                headers.append(
+                    tungstenite::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                    HeaderValue::from_static("*"),
+                );
                 match tx.send(http_req.uri().clone()) {
                     Ok(_) => Ok(http_rep),
                     Err(e) => todo!("{}", e),

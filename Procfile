@@ -1,1 +1,1 @@
-web: ./target/release/padington-server --port $PORT
+web: ./target/release/padington-server --port $PORT --base-folder /app

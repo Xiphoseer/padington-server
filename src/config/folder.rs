@@ -18,6 +18,12 @@ pub struct Folder {
     sub: HashMap<String, Folder>,
 }
 
+impl From<Option<PathBuf>> for Folder {
+    fn from(save_dir: Option<PathBuf>) -> Self {
+        Self { save_dir, ..Default::default() }
+    }
+}
+
 /// The type of file
 pub enum PathValidity<'a, 'b> {
     /// The path is not valid

@@ -30,6 +30,9 @@ pub struct Flags {
     /// Which port to use (if cfg isn't present)
     #[structopt(long = "port", short = "p")]
     pub port: Option<u16>,
+    /// Which base folder to use (if cfg isn't present)
+    #[structopt(long = "base-folder", short = "b")]
+    pub base_folder: Option<PathBuf>,
 }
 
 /// The type of connection we want
@@ -89,13 +92,13 @@ impl Flags {
             Ok(Setup {
                 addr: format!("0.0.0.0:{}", port),
                 conn: ConnSetup::Basic,
-                folder: Folder::default(),
+                folder: Folder::from(self.base_folder.clone()),
             })
         } else {
             Ok(Setup {
                 addr: String::from("127.0.0.1:9002"),
                 conn: ConnSetup::Basic,
-                folder: Folder::default(),
+                folder: Folder::from(self.base_folder.clone()),
             })
         }
     }
