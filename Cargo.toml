@@ -30,9 +30,9 @@ tungstenite = "0.10.1"
 urlencoding = "1.0"
 
 [dependencies.prosemirror]
-path = "../prosemirror"
-#git = "https://github.com/xiphoseer/prosemirror-rs"
-#branch = "main"
+#path = "../prosemirror"
+git = "https://github.com/xiphoseer/prosemirror-rs"
+branch = "main"
 version = "0.1"
 features = ["cmark"]
 
