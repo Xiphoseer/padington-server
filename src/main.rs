@@ -11,24 +11,36 @@ pub mod util;
 #[macro_use]
 extern crate derive_new;
 
-use crate::client::handle_connection;
-use crate::config::{ConnSetup, Flags, Setup};
-use crate::lobby::{JoinRequest, LobbyClient, LobbyServer};
-use color_eyre::Report;
-use eyre::{eyre, WrapErr};
+use crate::{
+    client::handle_connection,
+    config::{ConnSetup, Flags, Setup},
+    lobby::{JoinRequest, LobbyClient, LobbyServer},
+};
+use color_eyre::{eyre::WrapErr, Report};
 use futures_util::future::ready;
-//use log::*;
-use std::future::Future;
-use std::io;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
+use std::{
+    future::Future,
+    io,
+    net::{SocketAddr, ToSocketAddrs},
+};
 use structopt::StructOpt;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
-use tokio_rustls::rustls::{NoClientAuth, ServerConfig};
-use tokio_rustls::{server::TlsStream, TlsAcceptor};
-use tokio_tungstenite::stream::Stream;
-use tracing::{error, info, instrument};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::mpsc,
+};
+use tracing::{error, info, instrument, warn};
+
+#[cfg(feature = "tls")]
+use {
+    color_eyre::eyre::eyre,
+    std::sync::Arc,
+    tokio_rustls::{
+        rustls::{NoClientAuth, ServerConfig},
+        server::TlsStream,
+        TlsAcceptor,
+    },
+    tokio_tungstenite::stream::Stream,
+};
 
 async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStream) {
     if let Err(e) = handle_connection(lc, peer, stream).await {
@@ -36,7 +48,10 @@ async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStre
     }
 }
 
+#[cfg(feature = "tls")]
 type ClientStream = Stream<TcpStream, TlsStream<TcpStream>>;
+#[cfg(not(feature = "tls"))]
+type ClientStream = TcpStream;
 
 async fn wait_for_connections<F, R>(
     mut listener: TcpListener,
@@ -57,7 +72,6 @@ async fn wait_for_connections<F, R>(
     }
 }
 
-#[cfg(feature = "capture-spantrace")]
 fn install_tracing() {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::prelude::*;
@@ -82,10 +96,15 @@ fn install_tracing() {
         .init();
 }
 
+async fn signal_handler() -> Result<(), Report> {
+    tokio::signal::ctrl_c().await?;
+    warn!("ctrl-c received!");
+    Ok(())
+}
+
 #[instrument]
 #[tokio::main]
 async fn main() -> Result<(), Report> {
-    #[cfg(feature = "capture-spantrace")]
     install_tracing();
 
     let flags: Flags = Flags::from_args();
@@ -96,6 +115,7 @@ async fn main() -> Result<(), Report> {
     let (lobby_sender, lobby_receiver) = mpsc::channel(100);
 
     tokio::spawn(LobbyServer::new(lobby_receiver, cfg.folder).run());
+    tokio::spawn(signal_handler());
 
     let listener = TcpListener::bind(&addr).await.wrap_err("Can't listen")?;
     info!("Listening on: {}", addr);
@@ -103,10 +123,13 @@ async fn main() -> Result<(), Report> {
     match cfg.conn {
         ConnSetup::Basic => {
             wait_for_connections(listener, lobby_sender, |stream| {
-                ready(Ok(Stream::Plain(stream)))
+                #[cfg(feature = "tls")]
+                let stream = Stream::Plain(stream);
+                ready(Ok(stream))
             })
             .await;
         }
+        #[cfg(feature = "tls")]
         ConnSetup::Tls { certs, mut keys } => {
             info!("Setting up TLS ...");
             let mut config = ServerConfig::new(NoClientAuth::new());

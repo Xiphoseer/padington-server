@@ -4,12 +4,10 @@ use crate::channel::{Broadcast, InitReply, Request, RequestKind, Signal, SignalK
 use crate::command::{Command, ParseCommandError};
 use crate::lobby::{JoinError, LobbyClient, UserID};
 use crate::ClientStream;
-use color_eyre::Report;
-use eyre::WrapErr;
+use color_eyre::{eyre::WrapErr, Report};
 use futures_util::future::{select, Either};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
-use log::*;
 use prosemirror::markdown::MD;
 use prosemirror::transform::Steps;
 use std::net::SocketAddr;
@@ -17,7 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::WebSocketStream;
-use tracing::error;
+use tracing::{debug, error, info, trace, warn};
 use tungstenite::http::{
     header::SEC_WEBSOCKET_PROTOCOL,
     response::Response as HttpResponse,

@@ -4,22 +4,28 @@ mod folder;
 
 pub use folder::{Folder, PathValidity};
 
-use color_eyre::Report;
-use color_eyre::Result;
-use eyre::{eyre, WrapErr};
+use color_eyre::{Report, Result, eyre::WrapErr};
 use serde::{de, Deserialize, Deserializer};
-use std::fmt::Display;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::{
+    fmt::Display,
+    path::PathBuf,
+    str::FromStr,
+};
 use structopt::StructOpt;
 use tokio::fs::read_to_string;
 use tracing::instrument;
 use tungstenite::http::Uri;
 
-use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
-use tokio_rustls::rustls::{Certificate, PrivateKey};
+cfg_if::cfg_if! {
+    if #[cfg(feature = "tls")] {
+        use color_eyre::eyre::eyre;
+        use std::{fs::File, io::BufReader};
+        use tokio_rustls::rustls::{
+            internal::pemfile::{certs, pkcs8_private_keys},
+            Certificate, PrivateKey
+        };
+    }
+}
 
 /// The commandline flags for the server
 #[derive(Debug, StructOpt)]
@@ -39,6 +45,7 @@ pub struct Flags {
 pub enum ConnSetup {
     /// A simple connection (localhost or behind a web-server)
     Basic,
+    #[cfg(feature = "tls")]
     /// A TLS connection set up within this service
     Tls {
         /// The loaded keys
@@ -70,6 +77,7 @@ impl Flags {
                 toml::from_str(&cfg_string).wrap_err("Could not parse config file")?;
 
             let addr = config.addr;
+            #[cfg(feature = "tls")]
             if let Some(cfg_tls) = config.tls {
                 if cfg_tls.enabled {
                     let certs = cfg_tls
@@ -115,6 +123,7 @@ pub struct Tls {
     pub key: PathBuf,
 }
 
+#[cfg(feature = "tls")]
 impl Tls {
     #[instrument]
     /// Load the TLS certificates

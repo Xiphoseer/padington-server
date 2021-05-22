@@ -6,7 +6,7 @@ pub use doc::DocState;
 use crate::lobby::{ChannelID, UserID};
 use color_eyre::Report;
 use futures_util::future::{select, Either};
-use log::*;
+use tracing::{trace, warn, error, debug};
 use prosemirror::markdown::{from_markdown, to_markdown, MarkdownNode, MD};
 use prosemirror::transform::{Step, StepResult, Steps};
 use serde::{Deserialize, Serialize};

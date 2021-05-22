@@ -6,7 +6,6 @@ use crate::{
 };
 use displaydoc::Display;
 use futures_util::future::{select, Either};
-use log::*;
 use serde::Serialize;
 use slug::slugify;
 use std::cmp::Ordering;
@@ -15,6 +14,7 @@ use std::collections::HashMap;
 use std::{fmt, path::PathBuf};
 use tokio::stream::StreamExt;
 use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::{trace, info, error};
 
 macro_rules! make_id {
     (#[$doc:meta] $name:ident, $key:literal) => {

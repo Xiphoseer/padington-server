@@ -5,28 +5,27 @@ authors = ["Xiphoseer"]
 edition = "2018"
 
 [features]
-capture-spantrace = []
-default = ["capture-spantrace"]
+tls = ["tokio-rustls"]
+default = ["tls"]
 
 [dependencies]
-color-eyre = "0.3"
+cfg-if = "1"
+color-eyre = "0.5"
 derive-new = "0.5"
 displaydoc = "0.1.6"
 env_logger = "0.7"
-eyre = "0.4"
-log = "0.4"
 serde_json = "1.0.53"
 slug = "0.1"
 structopt = "0.3.14"
 thiserror = "1.0"
 tokio-tungstenite = "0.10.1"
-tokio-rustls = "0.13"
+tokio-rustls = { optional = true, version = "0.13" }
 toml = "0.5.6"
 tracing = "0.1"
 tracing-error = "0.1"
 tracing-futures = "0.2"
 tracing-subscriber = "0.2"
-tungstenite = "0.10.1"
+tungstenite = { version = "0.10.1", default-features = false }
 urlencoding = "1.0"
 
 [dependencies.prosemirror]
@@ -48,4 +47,4 @@ features = ["async-await", "sink", "std"]
 [dependencies.tokio]
 version = "0.2"
 default-features = false
-features = ["io-util", "time", "stream", "macros", "sync", "fs"]
+features = ["io-util", "time", "stream", "macros", "sync", "fs", "signal"]
