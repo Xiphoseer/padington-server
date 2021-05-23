@@ -4,29 +4,33 @@ use crate::channel::{Broadcast, InitReply, Request, RequestKind, Signal, SignalK
 use crate::command::{Command, ParseCommandError};
 use crate::lobby::{JoinError, LobbyClient, UserID};
 use crate::ClientStream;
-use color_eyre::{eyre::WrapErr, Report};
+use color_eyre::Report;
 use futures_util::future::{select, Either};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use prosemirror::markdown::MD;
 use prosemirror::transform::Steps;
+use urlencoding::FromUrlEncodingError;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use tokio::{
-    sync::{mpsc, oneshot},
-    time::interval,
-};
+use thiserror::Error;
+use displaydoc::Display;
+use tokio::{io::AsyncWriteExt, sync::{mpsc, oneshot}, time::interval};
 use tokio_stream::wrappers::{IntervalStream, ReceiverStream, BroadcastStream};
-use tokio_tungstenite::accept_hdr_async;
-use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::{
+    accept_hdr_async,
+    tungstenite::error::Error as WsError,
+    WebSocketStream,
+};
 use tracing::{debug, error, info, trace, warn};
-use tungstenite::http::{
+use tungstenite::http::{self, header};
+use http::{
     header::SEC_WEBSOCKET_PROTOCOL, response::Response as HttpResponse, status::StatusCode,
     uri::Uri, HeaderValue,
 };
 use tungstenite::{handshake::server, Message, Result as TResult};
 
-type WsSender = SplitSink<WebSocketStream<ClientStream>, Message>;
+type WsSender<'a> = SplitSink<WebSocketStream<&'a mut ClientStream>, Message>;
 
 fn make_callback(tx: oneshot::Sender<Uri>) -> impl server::Callback {
     move |http_req: &server::Request, mut http_rep: server::Response| {
@@ -69,7 +73,7 @@ async fn handle_command(
     id: UserID,
     sig_tx: &mut mpsc::Sender<Signal>,
     msg_tx: &mut mpsc::Sender<Request>,
-    ws_sender: &mut WsSender,
+    ws_sender: &mut WsSender<'_>,
     cmd_res: Result<Command, ParseCommandError>,
 ) -> TResult<CommandRes> {
     match cmd_res {
@@ -207,7 +211,7 @@ async fn submit_close(id: UserID, msg_tx: &mut mpsc::Sender<Request>) {
     }
 }
 
-async fn handle_broadcast(msg: Broadcast, ws_sender: &mut WsSender) -> TResult<()> {
+async fn handle_broadcast(msg: Broadcast, ws_sender: &mut WsSender<'_>) -> TResult<()> {
     match msg {
         Broadcast::ChatMessage(id, text) => {
             let msg = format!("chat|{}|{}", id.int_val(), text);
@@ -238,7 +242,7 @@ async fn handle_broadcast(msg: Broadcast, ws_sender: &mut WsSender) -> TResult<(
     Ok(())
 }
 
-async fn handle_signal(signal: Signal, ws_sender: &mut WsSender) -> TResult<()> {
+async fn handle_signal(signal: Signal, ws_sender: &mut WsSender<'_>) -> TResult<()> {
     match signal.kind {
         SignalKind::WebRTC(payload) => {
             let msg = format!(
@@ -257,7 +261,7 @@ async fn handle_message(
     msg: Message,
     sig_tx: &mut mpsc::Sender<Signal>,
     msg_tx: &mut mpsc::Sender<Request>,
-    ws_sender: &mut WsSender,
+    ws_sender: &mut WsSender<'_>,
 ) -> Result<CommandRes, Report> {
     match msg {
         Message::Text(t) => {
@@ -284,22 +288,69 @@ async fn handle_message(
     Ok(CommandRes::Continue)
 }
 
+#[derive(Debug, Error, Display)]
+/// A call to [`handle_connection`] failed.
+pub enum HandleConnectionError {
+    /// WebSocket: {0}
+    WebSocket(#[from] WsError),
+    /// HTTP: {0}
+    Http(#[from] http::Error),
+    /// IO: {0}
+    Io(#[from] tokio::io::Error),
+    /// The connection was dropped during the handshake
+    CallbackDropped(#[source] oneshot::error::RecvError),
+    /// The channel names was invalid
+    InvalidChannelName(#[from] FromUrlEncodingError),
+    /// The channel join failed
+    JoinFailed(#[from] JoinError),
+}
+
 /// Handle an incoming connection
 pub async fn handle_connection(
     mut lc: LobbyClient,
     peer: SocketAddr,
-    stream: ClientStream,
-) -> Result<(), Report> {
+    mut client_stream: ClientStream,
+) -> Result<(), HandleConnectionError> {
     let (tx, rx) = oneshot::channel::<Uri>();
-    let ws_stream: WebSocketStream<ClientStream> =
-        accept_hdr_async(stream, make_callback(tx)).await?;
-    let uri: Uri = rx.await.wrap_err("Callback dropped")?;
+    let stream = &mut client_stream;
+    let ws_stream: WebSocketStream<&mut ClientStream> =
+        match accept_hdr_async(stream, make_callback(tx)).await {
+            Ok(ws_stream) => ws_stream,
+            Err(WsError::Protocol(e)) => {
+                let mut buf = vec![];
+                
+                // Create the response
+                let err_text = "This service requires use of the websocket protocol.\n";
+                let response = HttpResponse::builder()
+                    .status(StatusCode::UPGRADE_REQUIRED)
+                    .header(header::UPGRADE, "websocket")
+                    .header(header::CONTENT_LENGTH, err_text.len())
+                    .header(header::CONTENT_TYPE, "text/plain")
+                    .body(err_text)?;
+                
+                // Write response to the buffer
+                crate::util::http::write_response(&mut buf, &response).unwrap();
+                buf.extend_from_slice(response.body().as_bytes());
+
+                // Flush response to the stream
+                client_stream.write_all(&buf).await?;
+                client_stream.flush().await?;
+
+                info!("Invalid WebSocket request: {}", e);
+
+                return Ok(());
+            },
+            Err(e) => {
+                return Err(e.into());
+            }
+        };
+    let uri: Uri = rx.await.map_err(HandleConnectionError::CallbackDropped)?;
     let start_time = Instant::now();
 
     info!("New WebSocket connection: {} to {}", peer, uri);
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    let channel_path = urlencoding::decode(uri.path())?;
+    let channel_path = urlencoding::decode(uri.path()).map_err(HandleConnectionError::InvalidChannelName)?;
     let join_response = match lc.join_channel(channel_path).await {
         Ok(jr) => jr,
         Err(JoinError::IsFolder(c)) => {

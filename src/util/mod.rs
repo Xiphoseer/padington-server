@@ -1,6 +1,8 @@
 //! # Misc utitlities
 //!
 //! This module contains some utilities that are used but not specific to `padington`.
+pub(crate) mod http;
+
 use std::marker::PhantomData;
 
 /// A counter that produces IDs of type T

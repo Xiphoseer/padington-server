@@ -35,7 +35,7 @@ use {
 
 async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStream) {
     if let Err(e) = handle_connection(lc, peer, stream).await {
-        error!("Error processing connection: {}", e)
+        error!("accept_connection: {}", e)
     }
 }
 
