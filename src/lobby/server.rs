@@ -5,14 +5,13 @@ use crate::{
     util::{Counter, LoopState},
 };
 use displaydoc::Display;
-use futures_util::future::{select, Either};
+//use futures_util::{future::{select, Either}, pin_mut, select};
 use serde::Serialize;
 use slug::slugify;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::{fmt, path::PathBuf};
-use tokio::stream::StreamExt;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{trace, info, error};
 
@@ -237,21 +236,21 @@ impl LobbyServer {
     pub async fn run(mut self) {
         let (end_tx, mut end_rx) = mpsc::channel::<ChannelID>(5);
 
-        let mut sig_fut = end_rx.next();
-        let mut jrq_fut = self.inner.next();
+        //let end_rx = end_rx.fuse();
+        //let inner = self.inner.fuse();
+        let mut inner = self.inner;
+        //pin_mut!(end_rx, inner);
+
         loop {
-            let fut = select(sig_fut, jrq_fut);
-            match fut.await {
-                Either::Left((sig, jrq_fut_continue)) => {
+            tokio::select! {
+                sig = end_rx.recv() => {
                     if let Some(sig) = sig {
                         if let LoopState::Break(()) = self.state.handle_end(sig).await {
                             break;
                         }
                     }
-                    jrq_fut = jrq_fut_continue;
-                    sig_fut = end_rx.next();
                 }
-                Either::Right((msg, sig_fut_continue)) => {
+                msg = inner.recv() => {
                     if let Some(msg) = msg {
                         self.state
                             .handle_join_request(msg, &end_tx, &mut self.folder)
@@ -259,8 +258,6 @@ impl LobbyServer {
                     } else {
                         trace!("JoinRequest stream broke!");
                     }
-                    sig_fut = sig_fut_continue;
-                    jrq_fut = self.inner.next();
                 }
             }
         }

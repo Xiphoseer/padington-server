@@ -5,14 +5,14 @@ pub use doc::DocState;
 
 use crate::lobby::{ChannelID, UserID};
 use color_eyre::Report;
-use futures_util::future::{select, Either};
+use futures_util::{future::{select, Either}, StreamExt};
 use tracing::{trace, warn, error, debug};
 use prosemirror::markdown::{from_markdown, to_markdown, MarkdownNode, MD};
 use prosemirror::transform::{Step, StepResult, Steps};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
 use tokio::io::{AsyncReadExt, ErrorKind};
-use tokio::stream::StreamExt;
+use tokio_stream::{wrappers::ReceiverStream};
 use tokio::{
     fs::File,
     sync::{broadcast, mpsc, oneshot},
@@ -331,31 +331,38 @@ impl Channel {
         let mut c_state = ChannelState::new(doc_state);
 
         let mut ter_fut = self.ter_rx;
-        let mut msg_fut = self.msg_rx.next();
+        let mut msg_rx = ReceiverStream::new(self.msg_rx);
+        //pin_mut!(msg_rx);
+
+        let mut msg_fut = msg_rx.next();
+        
+        //let _ = msg_fut;
+        //let mut msg_fut = msg_rx.next();
+
         loop {
             match select(ter_fut, msg_fut).await {
-                Either::Left((ter, _msg_fut_continue)) => {
-                    match ter {
-                        Ok(()) => info!("No clients left, terminating"),
-                        Err(_) => info!("Server shutdown, terminating"),
-                    }
-
-                    let path = &self.comms.path;
-                    let md = to_markdown(&c_state.doc_state.doc)?;
-                    std::fs::write(path, md)?;
-
-                    break Ok(());
+                Either::Left((Ok(()), _)) => {
+                    info!("No clients left, terminating");
+                    break;
                 }
-                Either::Right((req, ter_fut_continue)) => {
+                Either::Left((Err(_), _)) => {
+                    info!("Server shutdown, terminating");
+                    break;
+                }
+                Either::Right((req, ter)) => {
                     if let Some(request) = req {
-                        self.comms.handle_request(&mut c_state, request).await
+                        self.comms.handle_request(&mut c_state, request).await;
                     } else {
                         info!("Terminated stream, what is this?");
                     }
-                    ter_fut = ter_fut_continue;
-                    msg_fut = self.msg_rx.next();
+                    ter_fut = ter;
+                    msg_fut = msg_rx.next();
                 }
             }
         }
+        let path = &self.comms.path;
+        let md = to_markdown(&c_state.doc_state.doc)?;
+        std::fs::write(path, md)?;
+        Ok(())
     }
 }

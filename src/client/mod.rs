@@ -12,16 +12,17 @@ use prosemirror::markdown::MD;
 use prosemirror::transform::Steps;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::interval,
+};
+use tokio_stream::wrappers::{IntervalStream, ReceiverStream, BroadcastStream};
 use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, info, trace, warn};
 use tungstenite::http::{
-    header::SEC_WEBSOCKET_PROTOCOL,
-    response::Response as HttpResponse,
-    status::StatusCode,
-    uri::Uri,
-    HeaderValue,
+    header::SEC_WEBSOCKET_PROTOCOL, response::Response as HttpResponse, status::StatusCode,
+    uri::Uri, HeaderValue,
 };
 use tungstenite::{handshake::server, Message, Result as TResult};
 
@@ -310,13 +311,14 @@ pub async fn handle_connection(
         Err(e) => return Err(e.into()),
     };
     let mut msg_tx = join_response.msg_tx;
-    let mut bct_rx = join_response.bct_rx;
+    let mut bct_rx = BroadcastStream::new(join_response.bct_rx);
     let id: UserID = join_response.id;
 
-    let mut interval = tokio::time::interval(Duration::from_millis(1000));
+    let mut interval = IntervalStream::new(interval(Duration::from_millis(1000)));
     // Echo incoming WebSocket messages and send a message periodically every second.
 
-    let (mut sig_tx, mut sig_rx) = mpsc::channel::<Signal>(20);
+    let (mut sig_tx, sig_rx) = mpsc::channel::<Signal>(20);
+    let mut sig_rx = ReceiverStream::new(sig_rx);
 
     let int_fut = interval.next();
     let msg_fut = ws_receiver.next();

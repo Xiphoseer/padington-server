@@ -23,6 +23,7 @@
 **/secrets.dev.yaml
 **/values.dev.yaml
 README.md
+target
 
 # That messes up the docker-build
 rust-toolchain

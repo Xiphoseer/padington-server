@@ -18,16 +18,9 @@ use crate::{
 };
 use color_eyre::{eyre::WrapErr, Report};
 use futures_util::future::ready;
-use std::{
-    future::Future,
-    io,
-    net::{SocketAddr, ToSocketAddrs},
-};
+use std::{future::Future, io, net::{SocketAddr, ToSocketAddrs}, process};
 use structopt::StructOpt;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::mpsc,
-};
+use tokio::{net::{TcpListener, TcpStream}, sync::mpsc};
 use tracing::{error, info, instrument, warn};
 
 #[cfg(feature = "tls")]
@@ -36,10 +29,8 @@ use {
     std::sync::Arc,
     tokio_rustls::{
         rustls::{NoClientAuth, ServerConfig},
-        server::TlsStream,
         TlsAcceptor,
     },
-    tokio_tungstenite::stream::Stream,
 };
 
 async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStream) {
@@ -48,13 +39,15 @@ async fn accept_connection(lc: LobbyClient, peer: SocketAddr, stream: ClientStre
     }
 }
 
-#[cfg(feature = "tls")]
-type ClientStream = Stream<TcpStream, TlsStream<TcpStream>>;
 #[cfg(not(feature = "tls"))]
 type ClientStream = TcpStream;
+#[cfg(feature = "tls")]
+mod stream;
+#[cfg(feature = "tls")]
+pub use stream::ClientStream;
 
 async fn wait_for_connections<F, R>(
-    mut listener: TcpListener,
+    listener: TcpListener,
     lobby_sender: mpsc::Sender<JoinRequest>,
     map: F,
 ) where
@@ -99,7 +92,7 @@ fn install_tracing() {
 async fn signal_handler() -> Result<(), Report> {
     tokio::signal::ctrl_c().await?;
     warn!("ctrl-c received!");
-    Ok(())
+    process::exit(1);
 }
 
 #[instrument]
@@ -124,7 +117,7 @@ async fn main() -> Result<(), Report> {
         ConnSetup::Basic => {
             wait_for_connections(listener, lobby_sender, |stream| {
                 #[cfg(feature = "tls")]
-                let stream = Stream::Plain(stream);
+                let stream = ClientStream::Plain(stream);
                 ready(Ok(stream))
             })
             .await;
@@ -144,7 +137,7 @@ async fn main() -> Result<(), Report> {
             wait_for_connections(listener, lobby_sender, |stream: TcpStream| async {
                 let acceptor = acceptor.clone();
                 let stream = acceptor.accept(stream).await?;
-                Ok(Stream::Tls(stream))
+                Ok(ClientStream::Rustls(Box::new(stream)))
             })
             .await;
         }
